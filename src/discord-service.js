@@ -126,6 +126,12 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
                     : action === 'resolved' ? 'resolved_suggestion'
                     : action;
     }
+    
+    console.log('[Discord] notifyOwner:', notifyOwner, 'discordUserId:', discordUserId);
+    const mentionId = notifyOwner ? discordUserId : null;
+    console.log('[Discord] mentionId:', mentionId);
+    const message = buildMessage(messageAction, { mention: mentionId, bugLevel, devNotes, assigneeName });
+    console.log('[Discord] message preview:', message.slice(0, 100));
 
     // Only mention the user if they opted in by reacting
     const mentionId = notifyOwner ? discordUserId : null;

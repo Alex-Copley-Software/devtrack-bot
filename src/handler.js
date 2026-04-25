@@ -56,7 +56,9 @@ async function handleNewPost({ thread, starterMessage, reportType, client }) {
     const reportId = response.data.reportId;
     console.log(`[Handler] Report created: ID ${reportId}`);
 
-    // Log the starter message to the conversation log
+    // Small delay to ensure report is committed before logging
+    await new Promise(r => setTimeout(r, 500));
+
     await logMessage({
       reportId,
       content: content || '(No description provided)',
@@ -92,7 +94,7 @@ async function handleNewPost({ thread, starterMessage, reportType, client }) {
       collector.on('collect', async () => {
         console.log(`[Handler] ${discordUser} opted in to notifications for report ${reportId}`);
         // Update report to mark user as opted in
-        await axios.patch(`${API_URL}/api/reports/${reportId}`, { notifyOwner: true }, {
+        await axios.patch(`${API_URL}/api/bot/report/${reportId}`, { notifyOwner: true }, {
           headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET },
         }).catch(e => console.error('[Handler] Failed to set notifyOwner:', e.message));
 

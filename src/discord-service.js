@@ -92,7 +92,7 @@ async function getClient() {
 }
 
 // ── Core action ───────────────────────────────────────────────────────────────
-async function applyThreadAction({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName }) {
+async function applyThreadAction({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner }) {
   try {
     const client = await getClient();
     const thread = await client.channels.fetch(threadId);
@@ -127,7 +127,9 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
                     : action;
     }
 
-    const message = buildMessage(messageAction, { mention: discordUserId, bugLevel, devNotes, assigneeName });
+    // Only mention the user if they opted in by reacting
+    const mentionId = notifyOwner ? discordUserId : null;
+    const message = buildMessage(messageAction, { mention: mentionId, bugLevel, devNotes, assigneeName });
     if (message) {
       await thread.send(message);
       console.log(`[Discord] Message posted in thread ${threadId}`);

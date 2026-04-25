@@ -4,55 +4,11 @@ const FormData = require('form-data');
 const API_URL = process.env.API_URL || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
 
-// Keywords used to detect priority from the post content
-const PRIORITY_RULES = [
-  { priority: 'critical', keywords: ['crash', 'down', 'broken', 'critical', 'urgent', 'not working', 'cant login', "can't login", 'data loss'] },
-  { priority: 'high',     keywords: ['major', 'serious', 'important', 'high priority', 'bad bug', 'regression'] },
-  { priority: 'low',      keywords: ['minor', 'small', 'nitpick', 'cosmetic', 'typo', 'low priority'] },
-];
-
-// Extract tags from message content and thread name
-function extractTags(title, content) {
-  const combined = (title + ' ' + content).toLowerCase();
-  const tags = [];
-
-  const tagMap = {
-    mobile:        ['mobile', 'ios', 'android', 'iphone', 'ipad', 'phone'],
-    auth:          ['login', 'logout', 'auth', 'password', 'token', 'session'],
-    api:           ['api', 'endpoint', 'request', '500', '404', 'timeout'],
-    ui:            ['ui', 'button', 'layout', 'style', 'css', 'design', 'display'],
-    performance:   ['slow', 'performance', 'lag', 'freeze', 'memory', 'cpu', 'load'],
-    notifications: ['notification', 'badge', 'alert', 'push'],
-    export:        ['export', 'download', 'csv', 'pdf'],
-    import:        ['import', 'upload', 'csv'],
-    settings:      ['settings', 'preferences', 'config'],
-    database:      ['database', 'db', 'query', 'sql'],
-  };
-
-  for (const [tag, keywords] of Object.entries(tagMap)) {
-    if (keywords.some((kw) => combined.includes(kw))) {
-      tags.push(tag);
-    }
-  }
-
-  return tags.slice(0, 5);
-}
-
-// Detect priority from content
-function detectPriority(title, content) {
-  const combined = (title + ' ' + content).toLowerCase();
-  for (const rule of PRIORITY_RULES) {
-    if (rule.keywords.some((kw) => combined.includes(kw))) {
-      return rule.priority;
-    }
-  }
-  return 'medium';
-}
+const NOTIFY_EMOJI = '✅';
 
 // Build the list of Discord attachment URLs to pass to the API
 function buildAttachmentList(message) {
   if (!message || !message.attachments || message.attachments.size === 0) return [];
-
   return [...message.attachments.values()].map((att) => ({
     url: att.url,
     filename: att.name,
@@ -60,21 +16,18 @@ function buildAttachmentList(message) {
   }));
 }
 
-async function handleNewPost({ thread, starterMessage, reportType }) {
+async function handleNewPost({ thread, starterMessage, reportType, client }) {
   const title = thread.name;
   const content = starterMessage?.content || '';
   const discordUser = starterMessage?.author?.tag || 'unknown';
+  const discordUserId = starterMessage?.author?.id || '';
+  const discordThreadId = thread.id || '';
   const discordMessageId = starterMessage?.id || thread.id;
   const channelName = thread.parent?.name || 'unknown';
-
-  const priority = 'medium';
-  const tags = [];
   const attachments = buildAttachmentList(starterMessage);
 
   console.log(`[Handler] Processing: "${title}"`);
   console.log(`  Type:        ${reportType}`);
-  console.log(`  Priority:    ${priority}`);
-  console.log(`  Tags:        ${tags.join(', ') || 'none'}`);
   console.log(`  Attachments: ${attachments.length}`);
   console.log(`  Author:      ${discordUser}`);
 
@@ -82,16 +35,12 @@ async function handleNewPost({ thread, starterMessage, reportType }) {
   form.append('type', reportType);
   form.append('title', title);
   form.append('description', content || '(No description provided)');
-  form.append('priority', priority);
+  form.append('priority', 'medium');
   form.append('discordUser', discordUser);
-  form.append('discordUserId', starterMessage?.author?.id || '');
-  form.append('discordThreadId', thread.id || '');
+  form.append('discordUserId', discordUserId);
+  form.append('discordThreadId', discordThreadId);
   form.append('discordChannel', `#${channelName}`);
   form.append('discordMessageId', discordMessageId);
-
-  if (tags.length > 0) {
-    form.append('tags', tags.join(','));
-  }
 
   if (attachments.length > 0) {
     form.append('attachmentUrls', JSON.stringify(attachments));
@@ -99,38 +48,49 @@ async function handleNewPost({ thread, starterMessage, reportType }) {
 
   try {
     const response = await axios.post(`${API_URL}/api/bot/report`, form, {
-      headers: {
-        ...form.getHeaders(),
-        'x-bot-secret': BOT_SECRET,
-      },
+      headers: { ...form.getHeaders(), 'x-bot-secret': BOT_SECRET },
       timeout: 30000,
     });
 
-    console.log(`[Handler] Report created: ID ${response.data.reportId}`);
+    const reportId = response.data.reportId;
+    console.log(`[Handler] Report created: ID ${reportId}`);
 
-    // React to the Discord post to confirm it was logged
-    if (starterMessage) {
-      await starterMessage.react('✅').catch(() => {});
-    }
-
-    // Post a confirmation reply in the thread
-    await thread.send(
+    // Post confirmation message
+    const confirmMsg = await thread.send(
       reportType === 'suggestion'
-        ? `> 💡 **Suggestion received.** Thank you for the feedback — the engineers will review this shortly.`
-        : `> 🐛 **Bug report received.** Thank you for reporting — the engineers will get to this shortly.`
-    ).catch(() => {});
+        ? `> 💡 **Suggestion received.** Thank you for the feedback — the engineers will review this shortly.\n> React with ✅ below to get pinged when there's an update.`
+        : `> 🐛 **Bug report received.** Thank you for reporting — the engineers will get to this shortly.\n> React with ✅ below to get pinged when there's an update.`
+    ).catch(() => null);
+
+    // Bot reacts with ✅ on the confirmation message to make it easy to click
+    if (confirmMsg) {
+      await confirmMsg.react(NOTIFY_EMOJI).catch(() => {});
+
+      // Watch for the OP to react — if they do, mark them as opted in
+      const filter = (reaction, user) =>
+        reaction.emoji.name === NOTIFY_EMOJI &&
+        user.id === starterMessage?.author?.id;
+
+      const collector = confirmMsg.createReactionCollector({ filter, max: 1, time: 7 * 24 * 60 * 60 * 1000 }); // 7 days
+
+      collector.on('collect', async () => {
+        console.log(`[Handler] ${discordUser} opted in to notifications for report ${reportId}`);
+        // Update report to mark user as opted in
+        await axios.patch(`${API_URL}/api/reports/${reportId}`, { notifyOwner: true }, {
+          headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET },
+        }).catch(e => console.error('[Handler] Failed to set notifyOwner:', e.message));
+
+        await confirmMsg.reply(`Got it <@${discordUserId}> — you'll be pinged when engineers update this report.`).catch(() => {});
+      });
+    }
 
   } catch (err) {
     if (err.response?.status === 409) {
-      console.log(`[Handler] Skipped duplicate: "${title}" (already in database)`);
+      console.log(`[Handler] Skipped duplicate: "${title}"`);
       return;
     }
     console.error(`[Handler] Failed to submit report "${title}":`, err.response?.data || err.message);
-
-    // Notify in thread if submission failed
-    await thread.send(
-      '> ⚠️ DevTrack Bot had trouble logging this report. An engineer has been notified.'
-    ).catch(() => {});
+    await thread.send('> ⚠️ DevTrack Bot had trouble logging this report. An engineer has been notified.').catch(() => {});
   }
 }
 

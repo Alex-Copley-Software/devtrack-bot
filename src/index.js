@@ -8,6 +8,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMessageReactions,
   ],
 });
 
@@ -57,7 +58,7 @@ client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
   }
 
   try {
-    await handleNewPost({ thread, starterMessage, reportType });
+    await handleNewPost({ thread, starterMessage, reportType, client });
   } catch (err) {
     console.error(`[ThreadCreate] Failed to handle post "${thread.name}":`, err);
   }

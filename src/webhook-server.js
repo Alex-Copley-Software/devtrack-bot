@@ -4,7 +4,7 @@
 const http = require('http');
 const { applyThreadAction } = require('./discord-service');
 
-const PORT = process.env.BOT_WEBHOOK_PORT || 3002;
+const PORT = process.env.PORT || 3002;
 const SECRET = process.env.BOT_SECRET;
 
 function parseBody(req) {

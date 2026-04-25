@@ -77,7 +77,7 @@ async function handleNewPost({ thread, starterMessage, reportType, client }) {
         console.log(`[Handler] ${discordUser} opted in to notifications for report ${reportId}`);
         // Update report to mark user as opted in
         await axios.patch(`${API_URL}/api/bot/report/${reportId}`, { notifyOwner: true }, {
-            headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET },
+          headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET },
         }).catch(e => console.error('[Handler] Failed to set notifyOwner:', e.message));
 
         await confirmMsg.reply(`Got it <@${discordUserId}> — you'll be pinged when engineers update this report.`).catch(() => {});

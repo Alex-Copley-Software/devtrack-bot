@@ -67,8 +67,8 @@ async function handleNewPost({ thread, starterMessage, reportType }) {
   const discordMessageId = starterMessage?.id || thread.id;
   const channelName = thread.parent?.name || 'unknown';
 
-  const priority = detectPriority(title, content);
-  const tags = extractTags(title, content);
+  const priority = 'medium';
+  const tags = [];
   const attachments = buildAttachmentList(starterMessage);
 
   console.log(`[Handler] Processing: "${title}"`);
@@ -115,7 +115,9 @@ async function handleNewPost({ thread, starterMessage, reportType }) {
 
     // Post a confirmation reply in the thread
     await thread.send(
-      `> 📋 **Logged to DevTrack** — this ${reportType === 'suggestion' ? 'suggestion' : 'report'} has been added to the engineering dashboard.\n> Priority detected: **${priority}** · Tags: ${tags.length ? tags.map(t => `\`${t}\``).join(' ') : 'none'}`
+      reportType === 'suggestion'
+        ? `> 💡 **Suggestion received.** Thank you for the feedback — the engineers will review this shortly.`
+        : `> 🐛 **Bug report received.** Thank you for reporting — the engineers will get to this shortly.`
     ).catch(() => {});
 
   } catch (err) {

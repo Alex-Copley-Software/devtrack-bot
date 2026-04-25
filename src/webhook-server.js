@@ -38,7 +38,7 @@ function start() {
 
     try {
       const body = await parseBody(req);
-      const { threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName } = body;
+      const { threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner } = body;
 
       if (!threadId || !action) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -46,13 +46,13 @@ function start() {
         return;
       }
 
-      console.log(`[Webhook] Received action: ${action} for thread ${threadId}`);
+      console.log(`[Webhook] Received action: ${action} notifyOwner: ${notifyOwner} for thread ${threadId}`);
 
       // Fire and forget — respond immediately, Discord call happens async
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true }));
 
-      await applyThreadAction({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName });
+      await applyThreadAction({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner });
 
     } catch (err) {
       console.error('[Webhook] Error:', err.message);

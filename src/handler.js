@@ -56,9 +56,7 @@ async function handleNewPost({ thread, starterMessage, reportType, client }) {
     const reportId = response.data.reportId;
     console.log(`[Handler] Report created: ID ${reportId}`);
 
-    // Small delay to ensure report is committed before logging
-    await new Promise(r => setTimeout(r, 500));
-
+    // Log the starter message to the conversation log
     await logMessage({
       reportId,
       content: content || '(No description provided)',
@@ -68,10 +66,6 @@ async function handleNewPost({ thread, starterMessage, reportType, client }) {
       attachments: getAttachments(starterMessage),
       isBot: false,
     });
-
-    // Return reportId for caching in index.js
-    // (continues below)
-    const _reportId = reportId;
 
     // Post confirmation message
     const confirmMsg = await thread.send(

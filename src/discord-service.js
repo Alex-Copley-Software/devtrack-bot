@@ -105,19 +105,18 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
     const currentTags = (thread.appliedTags || []).filter(id => !managedTagIds.has(id));
 
     const newTags = [...currentTags];
-    if (action === 'accepted' && tagMap.accepted)  newTags.push(tagMap.accepted);
-    if (action === 'declined' && tagMap.declined)  newTags.push(tagMap.declined);
-    if (action === 'resolved' && tagMap.resolved)  newTags.push(tagMap.resolved);
-    if (bugLevel && tagMap[bugLevel])               newTags.push(tagMap[bugLevel]);
+    if (action === 'accepted' && tagMap.accepted) newTags.push(tagMap.accepted);
+    if (action === 'declined' && tagMap.declined) newTags.push(tagMap.declined);
+    if (action === 'resolved' && tagMap.resolved) newTags.push(tagMap.resolved);
+    if (bugLevel && tagMap[bugLevel])             newTags.push(tagMap[bugLevel]);
 
     // Discord allows max 5 tags per thread
     const finalTags = [...new Set(newTags)].slice(0, 5);
 
-    // Apply tags
     await thread.setAppliedTags(finalTags);
     console.log(`[Discord] Tags updated on thread ${threadId}: ${finalTags.join(', ')}`);
 
-    // Post reply message
+    // Build and send message
     const isSuggestion = reportType === 'suggestion';
     let messageAction = action;
     if (isSuggestion) {
@@ -126,16 +125,13 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
                     : action === 'resolved' ? 'resolved_suggestion'
                     : action;
     }
-    
-    console.log('[Discord] notifyOwner:', notifyOwner, 'discordUserId:', discordUserId);
-    const mentionId = notifyOwner ? discordUserId : null;
-    console.log('[Discord] mentionId:', mentionId);
-    const message = buildMessage(messageAction, { mention: mentionId, bugLevel, devNotes, assigneeName });
-    console.log('[Discord] message preview:', message.slice(0, 100));
 
-    // Only mention the user if they opted in by reacting
-    const mentionId = notifyOwner ? discordUserId : null;
-    const message = buildMessage(messageAction, { mention: mentionId, bugLevel, devNotes, assigneeName });
+    // Only ping if user opted in
+    console.log(`[Discord] notifyOwner: ${notifyOwner}, userId: ${discordUserId}`);
+    const pingId = notifyOwner ? discordUserId : null;
+    const message = buildMessage(messageAction, { mention: pingId, bugLevel, devNotes, assigneeName });
+    console.log(`[Discord] message: ${message.slice(0, 80)}`);
+
     if (message) {
       await thread.send(message);
       console.log(`[Discord] Message posted in thread ${threadId}`);

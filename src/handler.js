@@ -1,5 +1,6 @@
 const axios = require('axios');
 const FormData = require('form-data');
+const { logMessage, getAttachments } = require('./message-logger');
 
 const API_URL = process.env.API_URL || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
@@ -55,6 +56,21 @@ async function handleNewPost({ thread, starterMessage, reportType, client }) {
     const reportId = response.data.reportId;
     console.log(`[Handler] Report created: ID ${reportId}`);
 
+    // Log the starter message to the conversation log
+    await logMessage({
+      reportId,
+      content: content || '(No description provided)',
+      authorName: discordUser,
+      authorId: starterMessage?.author?.id || '',
+      authorAvatar: starterMessage?.author?.displayAvatarURL?.() || null,
+      attachments: getAttachments(starterMessage),
+      isBot: false,
+    });
+
+    // Return reportId for caching in index.js
+    // (continues below)
+    const _reportId = reportId;
+
     // Post confirmation message
     const confirmMsg = await thread.send(
       reportType === 'suggestion'
@@ -76,7 +92,7 @@ async function handleNewPost({ thread, starterMessage, reportType, client }) {
       collector.on('collect', async () => {
         console.log(`[Handler] ${discordUser} opted in to notifications for report ${reportId}`);
         // Update report to mark user as opted in
-        await axios.patch(`${API_URL}/api/bot/report/${reportId}`, { notifyOwner: true }, {
+        await axios.patch(`${API_URL}/api/reports/${reportId}`, { notifyOwner: true }, {
           headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET },
         }).catch(e => console.error('[Handler] Failed to set notifyOwner:', e.message));
 
@@ -84,13 +100,16 @@ async function handleNewPost({ thread, starterMessage, reportType, client }) {
       });
     }
 
+    return reportId;
+
   } catch (err) {
     if (err.response?.status === 409) {
       console.log(`[Handler] Skipped duplicate: "${title}"`);
-      return;
+      return null;
     }
     console.error(`[Handler] Failed to submit report "${title}":`, err.response?.data || err.message);
     await thread.send('> ⚠️ DevTrack Bot had trouble logging this report. An engineer has been notified.').catch(() => {});
+    return null;
   }
 }
 

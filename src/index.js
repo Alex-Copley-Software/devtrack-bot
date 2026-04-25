@@ -91,17 +91,14 @@ client.on(Events.MessageCreate, async (message) => {
   let reportId = threadReportMap.get(threadId);
 
   if (!reportId) {
-    // Try to find the report by threadId from the backend
+    // Try to find the report by threadId using the bot route
     try {
-      const TOKEN = process.env.BOT_SECRET;
-      const res = await axios.get(`${API_URL}/api/reports?discordThreadId=${threadId}`, {
+      const res = await axios.get(`${API_URL}/api/bot/report-by-thread/${threadId}`, {
         headers: { 'x-bot-secret': BOT_SECRET },
         timeout: 5000,
       });
-      // Find matching report
-      const match = (res.data || []).find(r => r.discordThreadId === threadId);
-      if (match) {
-        reportId = match.id;
+      if (res.data?.reportId) {
+        reportId = res.data.reportId;
         threadReportMap.set(threadId, reportId);
       }
     } catch (err) {

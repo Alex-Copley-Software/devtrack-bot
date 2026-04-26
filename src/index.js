@@ -14,10 +14,20 @@ const client = new Client({
   ],
 });
 
-const WATCHED_CHANNELS = {
-  [process.env.BUG_REPORT_CHANNEL_ID]: 'bug',
-  [process.env.SUGGESTIONS_CHANNEL_ID]: 'suggestion',
-};
+// Support multiple channels via CHANNEL_CONFIG JSON or fallback to individual env vars
+let WATCHED_CHANNELS = {};
+if (process.env.CHANNEL_CONFIG) {
+  try {
+    const configs = JSON.parse(process.env.CHANNEL_CONFIG);
+    configs.forEach(c => { WATCHED_CHANNELS[c.id] = c.type; });
+    console.log(`[Config] Loaded ${configs.length} channels from CHANNEL_CONFIG`);
+  } catch (e) {
+    console.error('[Config] Failed to parse CHANNEL_CONFIG:', e.message);
+  }
+}
+// Always include individual env vars as fallback/addition
+if (process.env.BUG_REPORT_CHANNEL_ID) WATCHED_CHANNELS[process.env.BUG_REPORT_CHANNEL_ID] = 'bug';
+if (process.env.SUGGESTIONS_CHANNEL_ID) WATCHED_CHANNELS[process.env.SUGGESTIONS_CHANNEL_ID] = 'suggestion';
 
 const threadReportMap = new Map();
 
@@ -45,8 +55,9 @@ async function registerCommands() {
 client.once(Events.ClientReady, async (c) => {
   console.log(`DevTrack Bot online as ${c.user.tag}`);
   console.log(`Watching channels:`);
-  console.log(`  Bug Reports  → ${process.env.BUG_REPORT_CHANNEL_ID}`);
-  console.log(`  Suggestions  → ${process.env.SUGGESTIONS_CHANNEL_ID}`);
+  Object.entries(WATCHED_CHANNELS).forEach(([id, type]) => {
+    console.log(`  ${type.padEnd(12)} → ${id}`);
+  });
   console.log(`  API          → ${process.env.API_URL}`);
   webhookServer.start();
   await registerCommands();

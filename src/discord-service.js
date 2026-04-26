@@ -3,9 +3,26 @@
 
 const { Client, GatewayIntentBits } = require('discord.js');
 
-// ── Tag IDs ───────────────────────────────────────────────────────────────────
-const TAGS = {
-  bug: {
+// ── Tag IDs per channel ───────────────────────────────────────────────────────
+// Each forum channel has its own unique tag IDs
+const CHANNEL_TAGS = {
+  // 📩┃rr
+  '1469702083803349134': {
+    accepted:  '1497996050403954951', // Approve
+    declined:  '1497996021379367185', // Declined
+    resolved:  '1497996122411634739', // Resolved
+    minor:     '1497996159405264926',
+    moderate:  '1497996234135310456',
+    major:     '1497996271183724564',
+  },
+  // 📩┃suggestions
+  '1469718819306999881': {
+    accepted:  '1485771424881705070', // Accepted
+    declined:  '1485771449628229822', // Rejected
+    resolved:  '1485771518029070356', // Implemented
+  },
+  // nda-bug-reports
+  '1496315962427969656': {
     accepted:  '1497459600755265667',
     declined:  '1497459634477334608',
     minor:     '1497459678236508190',
@@ -13,12 +30,25 @@ const TAGS = {
     major:     '1497459759366803516',
     resolved:  '1497459800076714064',
   },
-  suggestion: {
-    accepted:  '1497038042135920680',
-    declined:  '1497461498132303954',
-    resolved:  '1497461536053006377',
-  }
+  // 📩┃expeditions-rr
+  '1496927598561988649': {
+    accepted:  '1497995758174076978', // Approved
+    declined:  '1497995726477594644', // Declined
+    resolved:  '1497995818907603144', // Resolved
+    minor:     '1497995854462717993',
+    moderate:  '1497995898242990111',
+    major:     '1497995957026160730',
+  },
 };
+
+// Fallback tags (nda-bug-reports) if channel not found
+const DEFAULT_TAGS = CHANNEL_TAGS['1496315962427969656'];
+
+function getTagMap(thread) {
+  // Try parent channel ID first (forum channel), then thread ID
+  const parentId = thread.parentId;
+  return CHANNEL_TAGS[parentId] || CHANNEL_TAGS[thread.id] || DEFAULT_TAGS;
+}
 
 // ── Messages ──────────────────────────────────────────────────────────────────
 function buildMessage(action, opts = {}) {
@@ -111,20 +141,19 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
     const thread = await client.channels.fetch(threadId);
     if (!thread) { console.error(`[Discord] Thread ${threadId} not found`); return; }
 
-    const tagMap = TAGS[reportType] || TAGS.bug;
+    // Get tag map for this specific channel
+    const tagMap = getTagMap(thread);
 
     // Build new tag list — remove all managed tags first, then add new ones
     const managedTagIds = new Set(Object.values(tagMap));
     const currentTags = (thread.appliedTags || []).filter(id => !managedTagIds.has(id));
 
     const newTags = [...currentTags];
-    // Apply status tag
     if (action === 'accepted'    && tagMap.accepted)  newTags.push(tagMap.accepted);
     if (action === 'declined'    && tagMap.declined)  newTags.push(tagMap.declined);
     if (action === 'resolved'    && tagMap.resolved)  newTags.push(tagMap.resolved);
     if (action === 'in_progress' && tagMap.accepted)  newTags.push(tagMap.accepted);
     if (action === 'reviewing'   && tagMap.accepted)  newTags.push(tagMap.accepted);
-    // Apply bug level tag (minor/moderate/major) — always keep it if provided
     if (bugLevel && tagMap[bugLevel]) newTags.push(tagMap[bugLevel]);
 
     // Discord allows max 5 tags per thread
@@ -145,7 +174,6 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
                     : action;
     }
 
-    // Only ping if user opted in
     console.log(`[Discord] notifyOwner: ${notifyOwner}, userId: ${discordUserId}`);
     const pingId = notifyOwner ? discordUserId : null;
     const message = buildMessage(messageAction, { mention: pingId, bugLevel, devNotes, assigneeName });

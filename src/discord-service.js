@@ -118,12 +118,14 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
     const currentTags = (thread.appliedTags || []).filter(id => !managedTagIds.has(id));
 
     const newTags = [...currentTags];
+    // Apply status tag
     if (action === 'accepted'    && tagMap.accepted)  newTags.push(tagMap.accepted);
     if (action === 'declined'    && tagMap.declined)  newTags.push(tagMap.declined);
     if (action === 'resolved'    && tagMap.resolved)  newTags.push(tagMap.resolved);
     if (action === 'in_progress' && tagMap.accepted)  newTags.push(tagMap.accepted);
     if (action === 'reviewing'   && tagMap.accepted)  newTags.push(tagMap.accepted);
-    if (bugLevel && tagMap[bugLevel])             newTags.push(tagMap[bugLevel]);
+    // Apply bug level tag (minor/moderate/major) — always keep it if provided
+    if (bugLevel && tagMap[bugLevel]) newTags.push(tagMap[bugLevel]);
 
     // Discord allows max 5 tags per thread
     const finalTags = [...new Set(newTags)].slice(0, 5);

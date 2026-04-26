@@ -6,17 +6,17 @@ const { Client, GatewayIntentBits } = require('discord.js');
 // ── Tag IDs ───────────────────────────────────────────────────────────────────
 const TAGS = {
   bug: {
-    accepted:  '1497459600755265667',
-    declined:  '1497459634477334608',
-    minor:     '1497459678236508190',
-    moderate:  '1497459716815716442',
-    major:     '1497459759366803516',
-    resolved:  '1497459800076714064',
+    accepted:  '1497308644528754849',
+    declined:  '1497308691161157824',
+    minor:     '1497308769242189824',
+    moderate:  '1497308817493594264',
+    major:     '1497308901509566587',
+    resolved:  '1497309084893053028',
   },
   suggestion: {
-    accepted:  '1497038042135920680',
-    declined:  '1497461498132303954',
-    resolved:  '1497461536053006377',
+    accepted:  '1497309301386248473',
+    declined:  '1497309324433817651',
+    resolved:  '1497309370772488322',
   }
 };
 
@@ -26,6 +26,19 @@ function buildMessage(action, opts = {}) {
   const ping = mention ? `<@${mention}>` : '';
 
   switch (action) {
+    case 'in_progress':
+      return [
+        `${ping} 🔧 **This report is now being worked on.**`,
+        assigneeName ? `> **Assigned to:** ${assigneeName}` : '',
+        `> We'll update you when it moves to review.`,
+      ].filter(Boolean).join('\n');
+
+    case 'reviewing':
+      return [
+        `${ping} 🔬 **This report has been fixed and is now in QA review.**`,
+        `> Our testers are verifying the fix. We'll let you know when it's resolved.`,
+      ].filter(Boolean).join('\n');
+
     case 'accepted':
       return [
         `${ping} ✅ **Your report has been reviewed and accepted.**`,
@@ -105,9 +118,11 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
     const currentTags = (thread.appliedTags || []).filter(id => !managedTagIds.has(id));
 
     const newTags = [...currentTags];
-    if (action === 'accepted' && tagMap.accepted) newTags.push(tagMap.accepted);
-    if (action === 'declined' && tagMap.declined) newTags.push(tagMap.declined);
-    if (action === 'resolved' && tagMap.resolved) newTags.push(tagMap.resolved);
+    if (action === 'accepted'    && tagMap.accepted)  newTags.push(tagMap.accepted);
+    if (action === 'declined'    && tagMap.declined)  newTags.push(tagMap.declined);
+    if (action === 'resolved'    && tagMap.resolved)  newTags.push(tagMap.resolved);
+    if (action === 'in_progress' && tagMap.accepted)  newTags.push(tagMap.accepted);
+    if (action === 'reviewing'   && tagMap.accepted)  newTags.push(tagMap.accepted);
     if (bugLevel && tagMap[bugLevel])             newTags.push(tagMap[bugLevel]);
 
     // Discord allows max 5 tags per thread
@@ -120,9 +135,11 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
     const isSuggestion = reportType === 'suggestion';
     let messageAction = action;
     if (isSuggestion) {
-      messageAction = action === 'accepted' ? 'accepted_suggestion'
-                    : action === 'declined' ? 'declined_suggestion'
-                    : action === 'resolved' ? 'resolved_suggestion'
+      messageAction = action === 'accepted'    ? 'accepted_suggestion'
+                    : action === 'declined'    ? 'declined_suggestion'
+                    : action === 'resolved'    ? 'resolved_suggestion'
+                    : action === 'in_progress' ? 'in_progress'
+                    : action === 'reviewing'   ? 'reviewing'
                     : action;
     }
 

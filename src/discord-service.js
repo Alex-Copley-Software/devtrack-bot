@@ -15,11 +15,23 @@ const CHANNEL_TAGS = {
     moderate:  '1497996234135310456',
     major:     '1497996271183724564',
   },
-  // 📩┃suggestions
+  // 📩┃suggestions (original)
   '1469718819306999881': {
-    accepted:  '1485771424881705070', // Accepted
-    declined:  '1485771449628229822', // Rejected
-    resolved:  '1485771518029070356', // Implemented
+    accepted:  '1485771424881705070',
+    declined:  '1485771449628229822',
+    resolved:  '1485771518029070356',
+  },
+  // Suggestion channel 1457942883943583864
+  '1457942883943583864': {
+    accepted:  '1497038042135920680',
+    declined:  '1497461498132303954',
+    resolved:  '1497461536053006377',
+  },
+  // Suggestion channel 1497022392462213305
+  '1497022392462213305': {
+    accepted:  '1497465075596787875',
+    declined:  '1497465091199598774',
+    resolved:  '1497465057313816589',
   },
   // nda-bug-reports
   '1496315962427969656': {

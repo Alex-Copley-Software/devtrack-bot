@@ -84,18 +84,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (type !== 'suggestion') continue;
         const channel = await client.channels.fetch(channelId).catch(() => null);
         if (!channel) continue;
+        console.log(`[SyncStars] Scanning ${channel.name}`);
         const active = await channel.threads.fetchActive();
         const archived = await channel.threads.fetchArchived({ limit: 100 });
         const threads = [...active.threads.values(), ...archived.threads.values()];
+        console.log(`[SyncStars] Found ${threads.length} threads`);
+
         for (const thread of threads) {
           try {
-            const starter = await thread.fetchStarterMessage({ cache: false }).catch(() => null);
-            if (!starter) continue;
-            // Fetch reactions fresh from Discord
-            await starter.reactions.fetch();
-            const starReaction = starter.reactions.cache.get('⭐');
-            const count = Math.max(0, (starReaction?.count || 0) - 1);
-            // Look up reportId
+            // Look up reportId first
             let reportId = threadReportMap.get(thread.id);
             if (!reportId) {
               const res = await axios.get(`${API_URL}/api/bot/report-by-thread/${thread.id}`, {
@@ -106,16 +103,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 threadReportMap.set(thread.id, reportId);
               }
             }
-            if (reportId) updates.push({ reportId, upvotes: count });
-          } catch {}
-          await new Promise(r => setTimeout(r, 200));
+            if (!reportId) continue;
+
+            // Fetch starter message with full reaction data
+            const starter = await thread.fetchStarterMessage({ cache: false, force: true }).catch(() => null);
+            if (!starter) continue;
+
+            // Force fetch all reactions
+            const reactions = await starter.reactions.fetch();
+            const starReaction = reactions.get('⭐');
+            // Count is total minus 1 for bot's own seed reaction
+            const botSeeded = starReaction ? [...(starReaction.users.cache.values())].some(u => u.bot) : false;
+            const count = Math.max(0, (starReaction?.count || 0) - (botSeeded ? 1 : 0));
+
+            console.log(`[SyncStars] Thread "${thread.name}": ${count} stars`);
+            updates.push({ reportId, upvotes: count });
+          } catch (err) {
+            console.error(`[SyncStars] Error on thread ${thread.id}:`, err.message);
+          }
+          await new Promise(r => setTimeout(r, 300));
         }
       }
+
       if (updates.length) {
         await axios.post(`${API_URL}/api/reports/sync-stars`, { updates }, {
-          headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET }
+          headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET },
+          timeout: 15000,
         });
       }
+      console.log(`[SyncStars] Done — ${updates.length} posts synced`);
       await interaction.editReply(`⭐ Synced star counts for **${updates.length}** suggestion posts.`);
     } catch (err) {
       console.error('[SyncStars]', err);

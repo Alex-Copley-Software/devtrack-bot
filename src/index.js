@@ -40,6 +40,10 @@ async function registerCommands() {
       .setName('sync')
       .setDescription('Scan forum channels and add any missing posts to the DevTrack queue')
       .toJSON(),
+    new SlashCommandBuilder()
+      .setName('syncstars')
+      .setDescription('Sync star reaction counts from all suggestion posts')
+      .toJSON(),
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -68,6 +72,54 @@ client.once(Events.ClientReady, async (c) => {
 // Handle slash commands
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+
+  if (interaction.commandName === 'syncstars') {
+    if (!interaction.memberPermissions?.has('ManageGuild')) {
+      return interaction.reply({ content: '❌ You need the Manage Server permission to run this.', ephemeral: true });
+    }
+    await interaction.reply({ content: '⭐ Scanning suggestion threads for star counts...', ephemeral: true });
+    try {
+      const updates = [];
+      for (const [channelId, type] of Object.entries(WATCHED_CHANNELS)) {
+        if (type !== 'suggestion') continue;
+        const channel = await client.channels.fetch(channelId).catch(() => null);
+        if (!channel) continue;
+        const active = await channel.threads.fetchActive();
+        const archived = await channel.threads.fetchArchived({ limit: 100 });
+        const threads = [...active.threads.values(), ...archived.threads.values()];
+        for (const thread of threads) {
+          try {
+            const starter = await thread.fetchStarterMessage({ cache: false }).catch(() => null);
+            if (!starter) continue;
+            const starReaction = starter.reactions.cache.get('⭐') || await starter.reactions.resolve('⭐');
+            const count = Math.max(0, (starReaction?.count || 0) - 1);
+            // Look up reportId
+            let reportId = threadReportMap.get(thread.id);
+            if (!reportId) {
+              const res = await axios.get(`${API_URL}/api/bot/report-by-thread/${thread.id}`, {
+                headers: { 'x-bot-secret': BOT_SECRET }, timeout: 5000
+              }).catch(() => null);
+              if (res?.data?.reportId) {
+                reportId = res.data.reportId;
+                threadReportMap.set(thread.id, reportId);
+              }
+            }
+            if (reportId) updates.push({ reportId, upvotes: count });
+          } catch {}
+          await new Promise(r => setTimeout(r, 200));
+        }
+      }
+      if (updates.length) {
+        await axios.post(`${API_URL}/api/reports/sync-stars`, { updates }, {
+          headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET }
+        });
+      }
+      await interaction.editReply(`⭐ Synced star counts for **${updates.length}** suggestion posts.`);
+    } catch (err) {
+      console.error('[SyncStars]', err);
+      await interaction.editReply('❌ Star sync failed — check the bot logs.');
+    }
+  }
 
   if (interaction.commandName === 'sync') {
     // Only allow admins or users with Manage Guild permission

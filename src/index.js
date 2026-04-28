@@ -31,6 +31,9 @@ if (process.env.CHANNEL_CONFIG) {
 if (process.env.BUG_REPORT_CHANNEL_ID) WATCHED_CHANNELS[process.env.BUG_REPORT_CHANNEL_ID] = 'bug';
 if (process.env.SUGGESTIONS_CHANNEL_ID) WATCHED_CHANNELS[process.env.SUGGESTIONS_CHANNEL_ID] = 'suggestion';
 
+const API_URL = process.env.API_URL || 'http://localhost:3001';
+const BOT_SECRET = process.env.BOT_SECRET;
+
 const threadReportMap = new Map();
 
 // Register slash commands

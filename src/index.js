@@ -75,9 +75,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.commandName === 'syncstars') {
     if (!interaction.memberPermissions?.has('ManageGuild')) {
-      return interaction.reply({ content: '❌ You need the Manage Server permission to run this.', ephemeral: true });
+      return interaction.reply({ content: '❌ You need the Manage Server permission to run this.', flags: 64 });
     }
-    await interaction.reply({ content: '⭐ Scanning suggestion threads for star counts...', ephemeral: true });
+    await interaction.reply({ content: '⭐ Scanning suggestion threads for star counts...', flags: 64 });
     try {
       const updates = [];
       for (const [channelId, type] of Object.entries(WATCHED_CHANNELS)) {
@@ -91,7 +91,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           try {
             const starter = await thread.fetchStarterMessage({ cache: false }).catch(() => null);
             if (!starter) continue;
-            const starReaction = starter.reactions.cache.get('⭐') || await starter.reactions.resolve('⭐');
+            // Fetch reactions fresh from Discord
+            await starter.reactions.fetch();
+            const starReaction = starter.reactions.cache.get('⭐');
             const count = Math.max(0, (starReaction?.count || 0) - 1);
             // Look up reportId
             let reportId = threadReportMap.get(thread.id);
@@ -124,10 +126,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.commandName === 'sync') {
     // Only allow admins or users with Manage Guild permission
     if (!interaction.memberPermissions?.has('ManageGuild')) {
-      return interaction.reply({ content: '❌ You need the Manage Server permission to run this.', ephemeral: true });
+      return interaction.reply({ content: '❌ You need the Manage Server permission to run this.', flags: 64 });
     }
 
-    await interaction.reply({ content: '🔄 Scanning forum channels for existing posts... this may take a moment.', ephemeral: true });
+    await interaction.reply({ content: '🔄 Scanning forum channels for existing posts... this may take a moment.', flags: 64 });
 
     try {
       const result = await runSync(client, WATCHED_CHANNELS, threadReportMap);

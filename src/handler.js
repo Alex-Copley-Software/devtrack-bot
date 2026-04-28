@@ -37,6 +37,11 @@ async function handleNewPost({ thread, starterMessage, reportType, client }) {
   form.append('title', title);
   form.append('description', content || '(No description provided)');
   form.append('priority', 'medium');
+  // Suggestions skip the queue and go straight to pending review
+  if (reportType === 'suggestion') {
+    form.append('queued', 'false');
+    form.append('status', 'open');
+  }
   form.append('discordUser', discordUser);
   form.append('discordUserId', discordUserId);
   form.append('discordThreadId', discordThreadId);

@@ -1,4 +1,5 @@
 require('dotenv').config();
+const axios = require('axios');
 const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const { handleNewPost } = require('./handler');
 const { logMessage, getAttachments } = require('./message-logger');
@@ -11,6 +12,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildMessageTyping,
   ],
 });
 
@@ -118,6 +120,12 @@ client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
     if (reportId) {
       threadReportMap.set(thread.id, reportId);
       console.log(`[ThreadCreate] Cached thread ${thread.id} → report ${reportId}`);
+
+      // Seed ⭐ reaction on suggestion starter message so users can upvote
+      if (reportType === 'suggestion' && starterMessage) {
+        await starterMessage.react('⭐').catch(() => {});
+        console.log(`[ThreadCreate] Seeded ⭐ reaction on suggestion`);
+      }
     }
   } catch (err) {
     console.error(`[ThreadCreate] Failed to handle post "${thread.name}":`, err);
@@ -151,6 +159,48 @@ client.on(Events.MessageCreate, async (message) => {
     attachments: getAttachments(message),
     isBot: false,
   });
+});
+
+
+// Sync ⭐ reaction counts on suggestion posts
+async function syncStarCount(reaction, isSuggestion) {
+  if (reaction.emoji.name !== '⭐') return;
+  const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
+  const thread = message.channel;
+  if (!thread?.isThread()) return;
+  if (!WATCHED_CHANNELS[thread.parentId]) return;
+  if (WATCHED_CHANNELS[thread.parentId] !== 'suggestion') return;
+
+  // Only count stars on the starter message
+  const starter = await thread.fetchStarterMessage({ cache: false }).catch(() => null);
+  if (!starter || starter.id !== message.id) return;
+
+  const starReaction = message.reactions.cache.get('⭐');
+  // Subtract 1 for the bot's own seed reaction
+  const count = Math.max(0, (starReaction?.count || 0) - 1);
+
+  const reportId = threadReportMap.get(thread.id);
+  if (!reportId) return;
+
+  try {
+    await axios.patch(`${API_URL}/api/reports/${reportId}/upvotes`, { upvotes: count }, {
+      headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET },
+      timeout: 5000,
+    });
+    console.log(`[Stars] Synced ${count} stars for report ${reportId}`);
+  } catch (err) {
+    console.error(`[Stars] Failed to sync stars:`, err.message);
+  }
+}
+
+client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  if (user.bot) return;
+  await syncStarCount(reaction, true);
+});
+
+client.on(Events.MessageReactionRemove, async (reaction, user) => {
+  if (user.bot) return;
+  await syncStarCount(reaction, true);
 });
 
 client.login(process.env.DISCORD_TOKEN).catch((err) => {

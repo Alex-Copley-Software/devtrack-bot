@@ -23,34 +23,46 @@ async function syncChannel(channel, reportType, threadReportMap) {
     console.log(`[Sync] Found ${allThreads.length} threads in #${channel.name}`);
 
     for (const thread of allThreads) {
-      // Check if already in database via thread ID BEFORE trying to create
+      // Check if already in database via thread ID or message ID BEFORE trying to create
+      let existingId = null;
       try {
-        const existing = await axios.get(`${API_URL}/api/bot/report-by-thread/${thread.id}`, {
-          headers: { 'x-bot-secret': BOT_SECRET },
-          timeout: 5000,
+        const r = await axios.get(`${API_URL}/api/bot/report-by-thread/${thread.id}`, {
+          headers: { 'x-bot-secret': BOT_SECRET }, timeout: 5000,
         });
-        if (existing.data?.reportId) {
-          // Already exists — just cache it
-          threadReportMap.set(thread.id, existing.data.reportId);
-          skipped++;
-          continue;
+        existingId = r.data?.reportId;
+      } catch {}
+
+      // Fallback: check by message ID
+      if (!existingId) {
+        let starterMsg = null;
+        try { starterMsg = await thread.fetchStarterMessage({ cache: false }); } catch {}
+        if (starterMsg) {
+          try {
+            const r = await axios.get(`${API_URL}/api/bot/report-by-message/${starterMsg.id}`, {
+              headers: { 'x-bot-secret': BOT_SECRET }, timeout: 5000,
+            });
+            existingId = r.data?.reportId;
+          } catch {}
+          // Store starter message for later use
+          thread._cachedStarter = starterMsg;
         }
-      } catch (err) {
-        if (err.response?.status !== 404) {
-          // Real error, skip this thread
+      }
+
+      if (existingId) {
+        threadReportMap.set(thread.id, existingId);
+        skipped++;
+        continue;
+      }
+
+      // Use cached starter message from existence check above if available
+      let starterMessage = thread._cachedStarter || null;
+      if (!starterMessage) {
+        try {
+          starterMessage = await thread.fetchStarterMessage({ cache: false });
+        } catch {
           failed++;
           continue;
         }
-        // 404 means not found — proceed to create
-      }
-
-      // Fetch starter message
-      let starterMessage = null;
-      try {
-        starterMessage = await thread.fetchStarterMessage({ cache: false });
-      } catch {
-        failed++;
-        continue;
       }
       if (!starterMessage) { failed++; continue; }
 

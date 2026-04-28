@@ -105,18 +105,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
             if (!reportId) continue;
 
-            // Fetch starter message with full reaction data
-            const starter = await thread.fetchStarterMessage({ cache: false, force: true }).catch(() => null);
+            // Fetch the starter message directly via channel messages
+            const starter = await thread.fetchStarterMessage({ cache: false }).catch(() => null);
             if (!starter) continue;
 
-            // Force fetch all reactions
-            const reactions = await starter.reactions.fetch();
-            const starReaction = reactions.get('⭐');
-            // Count is total minus 1 for bot's own seed reaction
-            const botSeeded = starReaction ? [...(starReaction.users.cache.values())].some(u => u.bot) : false;
-            const count = Math.max(0, (starReaction?.count || 0) - (botSeeded ? 1 : 0));
+            // Fetch the message directly to get fresh reaction data
+            const freshMsg = await thread.messages.fetch(starter.id).catch(() => null);
+            if (!freshMsg) continue;
 
-            console.log(`[SyncStars] Thread "${thread.name}": ${count} stars`);
+            // Seed ⭐ if not already there
+            const starReaction = freshMsg.reactions.cache.get('⭐');
+            if (!starReaction || starReaction.count === 0) {
+              await starter.react('⭐').catch(() => {});
+              console.log(`[SyncStars] Seeded ⭐ on "${thread.name}"`);
+            }
+
+            // Count minus bot's seed
+            const freshCount = starReaction?.count || 0;
+            const count = Math.max(0, freshCount - 1);
+
+            console.log(`[SyncStars] Thread "${thread.name}": ${count} user stars`);
             updates.push({ reportId, upvotes: count });
           } catch (err) {
             console.error(`[SyncStars] Error on thread ${thread.id}:`, err.message);
@@ -235,7 +243,7 @@ client.on(Events.MessageCreate, async (message) => {
 // Sync ⭐ reaction counts on suggestion posts
 async function syncStarCount(reaction, isSuggestion) {
   if (reaction.emoji.name !== '⭐') return;
-  const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
+  const message = reaction.message.partial ? await reaction.message.fetch() : await reaction.message.channel.messages.fetch(reaction.message.id).catch(() => reaction.message);
   const thread = message.channel;
   if (!thread?.isThread()) return;
   if (!WATCHED_CHANNELS[thread.parentId]) return;

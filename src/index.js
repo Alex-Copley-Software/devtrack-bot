@@ -95,13 +95,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
       function tally(arr) {
         const map = {};
         arr.forEach(r => {
-          const key = r.discordUserId || r.discordUser;
-          const name = (r.discordUser || 'Unknown').replace(/\.soullessbody|#\d{4}/g, '').trim() || r.discordUser;
+          // Use discordUserId if available, fallback to discordUser string
+          const key = r.discordUserId || r.discordUser || 'unknown';
+          const name = r.discordUser || 'Unknown';
           if (!map[key]) map[key] = { name, count: 0, minor: 0, moderate: 0, major: 0 };
           map[key].count++;
           if (r.bugLevel) map[key][r.bugLevel] = (map[key][r.bugLevel] || 0) + 1;
         });
-        return Object.values(map).sort((a, b) => b.count - a.count).slice(0, 10);
+        // Return ALL reporters sorted, no slice
+        return Object.values(map).sort((a, b) => b.count - a.count);
       }
 
       const accepted = reports.filter(r => !r.queued && (r.type === 'bug' || r.type === 'crash'));
@@ -115,7 +117,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const guild = interaction.guild;
       // Build leaderboard as a text embed instead
-      const top10 = bugReporters.slice(0, 10);
       const medals = ['🥇','🥈','🥉'];
       // 10 squares per person, ceil to fill exactly 10
       function makeBar(r) {
@@ -139,16 +140,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // Paginate — 10 per page
       const PAGE_SIZE = 10;
       const totalPages = Math.ceil(bugReporters.length / PAGE_SIZE);
-      const page = 0; // always post page 1; future: could add buttons
-      const pageReporters = bugReporters.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-      const lines = pageReporters.map((r, i) => {
-        const rank = page * PAGE_SIZE + i;
-        const medal = medals[rank] || ('**#' + (rank+1) + '**');
-        const parts = [r.minor && (r.minor + 'm'), r.moderate && (r.moderate + 'mod'), r.major && (r.major + 'maj')].filter(Boolean).join(' ');
-        const partStr = parts ? ' *(' + parts + ')*' : '';
-        return medal + ' **' + r.name + '** — ' + r.count + ' reports' + partStr + '\n' + makeBar(r);
-      }).join('\n');
 
       const suggLines = suggReporters.slice(0, 5).map((s, i) =>
         (medals[i] || ('#' + (i + 1))) + ' **' + s.name + '** — ' + s.count

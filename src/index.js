@@ -118,20 +118,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const top10 = bugReporters.slice(0, 10);
       const medals = ['🥇','🥈','🥉'];
       const lines = top10.map((r, i) => {
-        const medal = medals[i] || `**#${i+1}**`;
-        const bar = '█'.repeat(Math.round((r.count / (top10[0]?.count||1)) * 12));
-        const parts = [r.minor&&`${r.minor}m`,r.moderate&&`${r.moderate}mod`,r.major&&`${r.major}maj`].filter(Boolean).join(' ');
-        return `${medal} **${r.name}** — ${r.count} reports ${parts?`*(${parts})*`:''}
-\`${bar}\``;
-      }).join('
-');
+        const medal = medals[i] || ('**#' + (i+1) + '**');
+        const barLen = Math.round((r.count / (top10[0]?.count || 1)) * 12);
+        const bar = '█'.repeat(barLen) || '░';
+        const parts = [r.minor && (r.minor + 'm'), r.moderate && (r.moderate + 'mod'), r.major && (r.major + 'maj')].filter(Boolean).join(' ');
+        const partStr = parts ? ' *(' + parts + ')*' : '';
+        return medal + ' **' + r.name + '** — ' + r.count + ' reports' + partStr + '\n`' + bar + '`';
+      }).join('\n');
 
-      const suggLines = suggReporters.slice(0,5).map((s,i) =>
-        `${medals[i]||`#${i+1}`} **${s.name}** — ${s.count}`
-      ).join('
-');
+      const suggLines = suggReporters.slice(0, 5).map((s, i) =>
+        (medals[i] || ('#' + (i + 1))) + ' **' + s.name + '** — ' + s.count
+      ).join('\n');
 
-      await interaction.editReply({
+            await interaction.editReply({
         embeds: [{
           title: '🏆 Bug Reporter Leaderboard',
           description: lines,

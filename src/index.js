@@ -49,7 +49,18 @@ async function registerCommands() {
       .toJSON(),
     new SlashCommandBuilder()
       .setName('leaderboard')
-      .setDescription('Post the top bug reporter leaderboard image to this channel')
+      .setDescription('Post the bug reporter leaderboard')
+      .addStringOption(opt => opt
+        .setName('period')
+        .setDescription('Time period to show')
+        .setRequired(false)
+        .addChoices(
+          { name: 'This Week', value: 'week' },
+          { name: 'This Month', value: 'month' },
+          { name: 'Last 3 Months', value: '3months' },
+          { name: 'This Year', value: 'year' },
+          { name: 'All Time', value: 'alltime' },
+        ))
       .toJSON(),
   ];
 
@@ -106,8 +117,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return Object.values(map).sort((a, b) => b.count - a.count);
       }
 
-      const accepted = reports.filter(r => !r.queued && (r.type === 'bug' || r.type === 'crash'));
-      const suggestions = reports.filter(r => !r.queued && r.type === 'suggestion');
+      const filtered = since ? reports.filter(r => new Date(r.createdAt) >= since) : reports;
+      const accepted = filtered.filter(r => !r.queued && (r.type === 'bug' || r.type === 'crash'));
+      const suggestions = filtered.filter(r => !r.queued && r.type === 'suggestion');
       const bugReporters = tally(accepted);
       const suggReporters = tally(suggestions);
 
@@ -159,7 +171,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }).join('\n');
 
         return {
-          title: '🏆 Bug Reporter Leaderboard — ' + accepted.length + ' total accepted',
+          title: '🏆 Bug Reporter Leaderboard — ' + periodLabel + ' — ' + accepted.length + ' reports',
           description: pageLines,
           color: 0x7c6cf0,
           fields: pageNum === 0 && suggReporters.length ? [{
@@ -167,7 +179,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             value: suggLines,
             inline: false
           }] : [],
-          footer: { text: (guild?.name || 'DevTrack') + ' · Page ' + (pageNum+1) + '/' + totalPages + ' · ' + bugReporters.length + ' unique reporters' },
+          footer: { text: (guild?.name || 'DevTrack') + ' · ' + periodLabel + ' · Page ' + (pageNum+1) + '/' + totalPages + ' · ' + bugReporters.length + ' reporters' },
           timestamp: new Date().toISOString(),
         };
       }

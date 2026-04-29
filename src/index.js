@@ -5,6 +5,7 @@ const { handleNewPost } = require('./handler');
 const { logMessage, getAttachments } = require('./message-logger');
 const webhookServer = require('./webhook-server');
 const { runSync } = require('./sync');
+const { handleTrack } = require('./track-command');
 
 const client = new Client({
   intents: [
@@ -62,6 +63,10 @@ async function registerCommands() {
           { name: 'All Time', value: 'alltime' },
         ))
       .toJSON(),
+    new SlashCommandBuilder()
+      .setName('track')
+      .setDescription('Get the DevTrack dashboard link for this report thread')
+      .toJSON(),
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -91,6 +96,11 @@ client.once(Events.ClientReady, async (c) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
+
+  if (interaction.commandName === 'track') {
+    await handleTrack(interaction);
+    return;
+  }
 
   if (interaction.commandName === 'leaderboard') {
     await interaction.deferReply();

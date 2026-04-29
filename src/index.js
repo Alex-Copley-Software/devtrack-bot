@@ -5,7 +5,6 @@ const { handleNewPost } = require('./handler');
 const { logMessage, getAttachments } = require('./message-logger');
 const webhookServer = require('./webhook-server');
 const { runSync } = require('./sync');
-const { generateLeaderboard } = require('./leaderboard-image');
 
 const client = new Client({
   intents: [
@@ -115,11 +114,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       const guild = interaction.guild;
-      const imageBuffer = generateLeaderboard(bugReporters, suggReporters, guild?.name || 'DevTrack');
+      // Build leaderboard as a text embed instead
+      const top10 = bugReporters.slice(0, 10);
+      const medals = ['🥇','🥈','🥉'];
+      const lines = top10.map((r, i) => {
+        const medal = medals[i] || `**#${i+1}**`;
+        const bar = '█'.repeat(Math.round((r.count / (top10[0]?.count||1)) * 12));
+        const parts = [r.minor&&`${r.minor}m`,r.moderate&&`${r.moderate}mod`,r.major&&`${r.major}maj`].filter(Boolean).join(' ');
+        return `${medal} **${r.name}** — ${r.count} reports ${parts?`*(${parts})*`:''}
+\`${bar}\``;
+      }).join('
+');
+
+      const suggLines = suggReporters.slice(0,5).map((s,i) =>
+        `${medals[i]||`#${i+1}`} **${s.name}** — ${s.count}`
+      ).join('
+');
 
       await interaction.editReply({
-        content: '🏆 **Bug Reporter Leaderboard**',
-        files: [{ attachment: imageBuffer, name: 'leaderboard.png' }]
+        embeds: [{
+          title: '🏆 Bug Reporter Leaderboard',
+          description: lines,
+          color: 0x7c6cf0,
+          fields: suggReporters.length ? [{
+            name: '💡 Top Suggestion Contributors',
+            value: suggLines,
+            inline: false
+          }] : [],
+          footer: { text: `${guild?.name || 'DevTrack'} · ${accepted.length} accepted reports total` },
+          timestamp: new Date().toISOString(),
+        }]
       });
     } catch (err) {
       console.error('[Leaderboard]', err.message);

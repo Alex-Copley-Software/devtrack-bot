@@ -95,6 +95,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.commandName === 'leaderboard') {
     await interaction.deferReply();
     try {
+      const period = interaction.options.getString('period') || 'alltime';
+      const now = new Date();
+      let since = null;
+      let periodLabel = 'All Time';
+      if (period === 'week')    { since = new Date(now - 7*24*60*60*1000);   periodLabel = 'This Week'; }
+      if (period === 'month')   { since = new Date(now.getFullYear(), now.getMonth(), 1); periodLabel = 'This Month'; }
+      if (period === '3months') { since = new Date(now - 90*24*60*60*1000);  periodLabel = 'Last 3 Months'; }
+      if (period === 'year')    { since = new Date(now.getFullYear(), 0, 1); periodLabel = 'This Year'; }
+
       // Fetch all reports from backend
       const res = await axios.get(`${API_URL}/api/bot/reports`, {
         headers: { 'x-bot-secret': BOT_SECRET },

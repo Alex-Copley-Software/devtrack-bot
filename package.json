@@ -12,7 +12,7 @@
     "axios": "^1.6.0",
     "dotenv": "^16.0.0",
     "form-data": "^4.0.0",
-    "canvas": "^2.11.2"
+    "@napi-rs/canvas": "^0.1.44"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"

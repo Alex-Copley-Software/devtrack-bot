@@ -1,7 +1,7 @@
 // leaderboard-image.js
 // Generates a styled leaderboard image using canvas
 
-const { createCanvas } = require('canvas');
+const { createCanvas } = require('@napi-rs/canvas');
 
 const COLORS = {
   bg:       '#0f0f13',
@@ -249,7 +249,7 @@ function generateLeaderboard(reporters, suggestions, serverName = 'DevTrack') {
   ctx.fillText('DevTrack Engineering Dashboard', WIDTH / 2, HEIGHT - 10);
   ctx.textAlign = 'left';
 
-  return canvas.toBuffer('image/png');
+  return canvas.toBuffer('image/png', { compressionLevel: 6 });
 }
 
 module.exports = { generateLeaderboard };

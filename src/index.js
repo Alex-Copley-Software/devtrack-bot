@@ -119,11 +119,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const medals = ['🥇','🥈','🥉'];
       const lines = top10.map((r, i) => {
         const medal = medals[i] || ('**#' + (i+1) + '**');
-        const barLen = Math.round((r.count / (top10[0]?.count || 1)) * 12);
-        const bar = '█'.repeat(barLen) || '░';
+        const total = r.count || 1;
+        const scale = 15;
+        // Segmented bar: blue=minor, orange=moderate, red=major
+        const minorBar  = '🟦'.repeat(Math.round((r.minor    || 0) / total * scale));
+        const modBar    = '🟧'.repeat(Math.round((r.moderate || 0) / total * scale));
+        const majBar    = '🟥'.repeat(Math.round((r.major    || 0) / total * scale));
+        const bar = (minorBar + modBar + majBar) || '▪️';
         const parts = [r.minor && (r.minor + 'm'), r.moderate && (r.moderate + 'mod'), r.major && (r.major + 'maj')].filter(Boolean).join(' ');
         const partStr = parts ? ' *(' + parts + ')*' : '';
-        return medal + ' **' + r.name + '** — ' + r.count + ' reports' + partStr + '\n`' + bar + '`';
+        return medal + ' **' + r.name + '** — ' + r.count + ' reports' + partStr + '\n' + bar;
       }).join('\n');
 
       const suggLines = suggReporters.slice(0, 5).map((s, i) =>

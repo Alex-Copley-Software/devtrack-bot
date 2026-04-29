@@ -5,6 +5,7 @@ const { handleNewPost } = require('./handler');
 const { logMessage, getAttachments } = require('./message-logger');
 const webhookServer = require('./webhook-server');
 const { runSync } = require('./sync');
+const { generateLeaderboard } = require('./leaderboard-image');
 
 const client = new Client({
   intents: [
@@ -47,6 +48,10 @@ async function registerCommands() {
       .setName('syncstars')
       .setDescription('Sync star reaction counts from all suggestion posts')
       .toJSON(),
+    new SlashCommandBuilder()
+      .setName('leaderboard')
+      .setDescription('Post the top bug reporter leaderboard image to this channel')
+      .toJSON(),
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -75,6 +80,52 @@ client.once(Events.ClientReady, async (c) => {
 // Handle slash commands
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+
+
+  if (interaction.commandName === 'leaderboard') {
+    await interaction.deferReply();
+    try {
+      // Fetch all reports from backend
+      const res = await axios.get(`${API_URL}/api/bot/reports`, {
+        headers: { 'x-bot-secret': BOT_SECRET },
+        timeout: 15000,
+      });
+      const reports = res.data || [];
+
+      // Tally bug reporters
+      function tally(arr) {
+        const map = {};
+        arr.forEach(r => {
+          const key = r.discordUserId || r.discordUser;
+          const name = (r.discordUser || 'Unknown').replace(/\.soullessbody|#\d{4}/g, '').trim() || r.discordUser;
+          if (!map[key]) map[key] = { name, count: 0, minor: 0, moderate: 0, major: 0 };
+          map[key].count++;
+          if (r.bugLevel) map[key][r.bugLevel] = (map[key][r.bugLevel] || 0) + 1;
+        });
+        return Object.values(map).sort((a, b) => b.count - a.count).slice(0, 10);
+      }
+
+      const accepted = reports.filter(r => !r.queued && (r.type === 'bug' || r.type === 'crash'));
+      const suggestions = reports.filter(r => !r.queued && r.type === 'suggestion');
+      const bugReporters = tally(accepted);
+      const suggReporters = tally(suggestions);
+
+      if (!bugReporters.length) {
+        return interaction.editReply('No accepted bug reports yet!');
+      }
+
+      const guild = interaction.guild;
+      const imageBuffer = generateLeaderboard(bugReporters, suggReporters, guild?.name || 'DevTrack');
+
+      await interaction.editReply({
+        content: '🏆 **Bug Reporter Leaderboard**',
+        files: [{ attachment: imageBuffer, name: 'leaderboard.png' }]
+      });
+    } catch (err) {
+      console.error('[Leaderboard]', err.message);
+      await interaction.editReply('❌ Failed to generate leaderboard — check the bot logs.');
+    }
+  }
 
   if (interaction.commandName === 'syncstars') {
     if (!interaction.memberPermissions?.has('ManageGuild')) {

@@ -117,38 +117,100 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // Build leaderboard as a text embed instead
       const top10 = bugReporters.slice(0, 10);
       const medals = ['🥇','🥈','🥉'];
-      const lines = top10.map((r, i) => {
-        const medal = medals[i] || ('**#' + (i+1) + '**');
+      // 10 squares per person, ceil to fill exactly 10
+      function makeBar(r) {
         const total = r.count || 1;
-        const scale = 15;
-        // Segmented bar: blue=minor, orange=moderate, red=major
-        const minorBar  = '🟦'.repeat(Math.round((r.minor    || 0) / total * scale));
-        const modBar    = '🟧'.repeat(Math.round((r.moderate || 0) / total * scale));
-        const majBar    = '🟥'.repeat(Math.round((r.major    || 0) / total * scale));
-        const bar = (minorBar + modBar + majBar) || '▪️';
+        const SQUARES = 10;
+        let minorSq = Math.round((r.minor || 0) / total * SQUARES);
+        let modSq   = Math.round((r.moderate || 0) / total * SQUARES);
+        let majSq   = Math.round((r.major || 0) / total * SQUARES);
+        // Adjust to always equal exactly 10
+        let sum = minorSq + modSq + majSq;
+        if (sum < SQUARES) minorSq += (SQUARES - sum);
+        if (sum > SQUARES) {
+          const excess = sum - SQUARES;
+          if (minorSq >= excess) minorSq -= excess;
+          else if (modSq >= excess) modSq -= excess;
+          else majSq -= excess;
+        }
+        return '🟦'.repeat(minorSq) + '🟧'.repeat(modSq) + '🟥'.repeat(majSq);
+      }
+
+      // Paginate — 10 per page
+      const PAGE_SIZE = 10;
+      const totalPages = Math.ceil(bugReporters.length / PAGE_SIZE);
+      const page = 0; // always post page 1; future: could add buttons
+      const pageReporters = bugReporters.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+      const lines = pageReporters.map((r, i) => {
+        const rank = page * PAGE_SIZE + i;
+        const medal = medals[rank] || ('**#' + (rank+1) + '**');
         const parts = [r.minor && (r.minor + 'm'), r.moderate && (r.moderate + 'mod'), r.major && (r.major + 'maj')].filter(Boolean).join(' ');
         const partStr = parts ? ' *(' + parts + ')*' : '';
-        return medal + ' **' + r.name + '** — ' + r.count + ' reports' + partStr + '\n' + bar;
+        return medal + ' **' + r.name + '** — ' + r.count + ' reports' + partStr + '\n' + makeBar(r);
       }).join('\n');
 
       const suggLines = suggReporters.slice(0, 5).map((s, i) =>
         (medals[i] || ('#' + (i + 1))) + ' **' + s.name + '** — ' + s.count
       ).join('\n');
 
-            await interaction.editReply({
-        embeds: [{
-          title: '🏆 Bug Reporter Leaderboard',
-          description: lines,
+            const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+
+      function buildEmbed(pageNum) {
+        const pageR = bugReporters.slice(pageNum * PAGE_SIZE, (pageNum + 1) * PAGE_SIZE);
+        const pageLines = pageR.map((r, i) => {
+          const rank = pageNum * PAGE_SIZE + i;
+          const medal = medals[rank] || ('**#' + (rank+1) + '**');
+          const parts = [r.minor && (r.minor + 'm'), r.moderate && (r.moderate + 'mod'), r.major && (r.major + 'maj')].filter(Boolean).join(' ');
+          const partStr = parts ? ' *(' + parts + ')*' : '';
+          return medal + ' **' + r.name + '** — ' + r.count + ' reports' + partStr + '\n' + makeBar(r);
+        }).join('\n');
+
+        return {
+          title: '🏆 Bug Reporter Leaderboard — ' + accepted.length + ' total accepted',
+          description: pageLines,
           color: 0x7c6cf0,
-          fields: suggReporters.length ? [{
+          fields: pageNum === 0 && suggReporters.length ? [{
             name: '💡 Top Suggestion Contributors',
             value: suggLines,
             inline: false
           }] : [],
-          footer: { text: `${guild?.name || 'DevTrack'} · ${accepted.length} accepted reports total` },
+          footer: { text: (guild?.name || 'DevTrack') + ' · Page ' + (pageNum+1) + '/' + totalPages + ' · ' + bugReporters.length + ' unique reporters' },
           timestamp: new Date().toISOString(),
-        }]
+        };
+      }
+
+      function buildRow(pageNum) {
+        if (totalPages <= 1) return null;
+        return new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('lb_prev_' + pageNum).setLabel('◀ Prev').setStyle(ButtonStyle.Secondary).setDisabled(pageNum === 0),
+          new ButtonBuilder().setCustomId('lb_next_' + pageNum).setLabel('Next ▶').setStyle(ButtonStyle.Primary).setDisabled(pageNum >= totalPages - 1),
+        );
+      }
+
+      const firstRow = buildRow(0);
+      const msg = await interaction.editReply({
+        embeds: [buildEmbed(0)],
+        components: firstRow ? [firstRow] : [],
       });
+
+      if (totalPages > 1) {
+        // Collect button interactions for 5 minutes
+        const collector = msg.createMessageComponentCollector({ time: 5 * 60 * 1000 });
+        collector.on('collect', async btn => {
+          await btn.deferUpdate();
+          const parts2 = btn.customId.split('_');
+          const dir = parts2[1]; // prev or next
+          const curPage = parseInt(parts2[2]);
+          const newPage = dir === 'next' ? curPage + 1 : curPage - 1;
+          const clampedPage = Math.max(0, Math.min(newPage, totalPages - 1));
+          const row = buildRow(clampedPage);
+          await btn.editReply({ embeds: [buildEmbed(clampedPage)], components: row ? [row] : [] });
+        });
+        collector.on('end', async () => {
+          await msg.edit({ components: [] }).catch(() => {});
+        });
+      }
     } catch (err) {
       console.error('[Leaderboard]', err.message);
       await interaction.editReply('❌ Failed to generate leaderboard — check the bot logs.');

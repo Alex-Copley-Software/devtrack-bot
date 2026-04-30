@@ -1,7 +1,7 @@
 require('dotenv').config();
 const axios = require('axios');
 const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } = require('discord.js');
-const { handleNewPost } = require('./handler');
+const { handleNewPost, handleRetryButton } = require('./handler');
 const { logMessage, getAttachments } = require('./message-logger');
 const webhookServer = require('./webhook-server');
 const { runSync } = require('./sync');
@@ -95,10 +95,16 @@ client.once(Events.ClientReady, async (c) => {
   console.log(`  API          → ${process.env.API_URL}`);
   webhookServer.start();
   await registerCommands();
+
 });
 
-// Handle slash commands
+// Handle slash commands and button interactions
 client.on(Events.InteractionCreate, async (interaction) => {
+  // Handle retry buttons from failed report submissions
+  const { handleNewPost } = require('./handler');
+  const retryDeps = { handleNewPost, client, WATCHED_CHANNELS, threadReportMap };
+  if (await handleRetryButton(interaction, retryDeps)) return;
+
   if (!interaction.isChatInputCommand()) return;
 
 

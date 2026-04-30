@@ -101,9 +101,12 @@ client.once(Events.ClientReady, async (c) => {
 // Handle slash commands and button interactions
 client.on(Events.InteractionCreate, async (interaction) => {
   // Handle retry buttons from failed report submissions
-  const { handleNewPost } = require('./handler');
-  const retryDeps = { handleNewPost, client, WATCHED_CHANNELS, threadReportMap };
-  if (await handleRetryButton(interaction, retryDeps)) return;
+  if (interaction.isButton()) {
+    const { handleNewPost } = require('./handler');
+    const retryDeps = { handleNewPost, client, WATCHED_CHANNELS, threadReportMap };
+    await handleRetryButton(interaction, retryDeps);
+    return;
+  }
 
   if (!interaction.isChatInputCommand()) return;
 

@@ -198,7 +198,7 @@ async function sendFailureMessage(thread, title) {
  */
 async function handleRetryButton(interaction, deps) {
   if (!interaction.isButton()) return false;
-  if (!interaction.customId.startsWith('retry_report:')) return false;
+  if (!interaction.customId?.startsWith('retry_report:')) return false;
 
   const threadId = interaction.customId.split(':')[1];
   const entry    = getEntry(threadId);

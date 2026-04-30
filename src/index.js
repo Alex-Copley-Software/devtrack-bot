@@ -102,9 +102,11 @@ client.once(Events.ClientReady, async (c) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   // Handle retry buttons from failed report submissions
   if (interaction.isButton()) {
-    const { handleNewPost } = require('./handler');
-    const retryDeps = { handleNewPost, client, WATCHED_CHANNELS, threadReportMap };
-    await handleRetryButton(interaction, retryDeps);
+    if (interaction.customId?.startsWith('retry_report:')) {
+      const { handleNewPost } = require('./handler');
+      const retryDeps = { handleNewPost, client, WATCHED_CHANNELS, threadReportMap };
+      await handleRetryButton(interaction, retryDeps);
+    }
     return;
   }
 

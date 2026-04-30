@@ -170,23 +170,28 @@ async function handleNewPost({ thread, starterMessage, reportType, client }) {
 const RETRY_COOLDOWN_MS = 60 * 1000; // 1 minute
 
 async function handleRetryButton(interaction) {
+  if (!interaction.isButton()) return false;
+  if (!interaction.customId?.startsWith('retry_report:')) return false;
+
   const threadId = interaction.customId.split(':')[1];
   const pending  = pendingRetries.get(threadId);
 
   if (!pending) {
-    return interaction.reply({
+    await interaction.reply({
       content: '❌ No pending retry found. Try `/reopen` instead.',
       ephemeral: true,
     });
+    return true;
   }
 
   const elapsed = Date.now() - pending.lastAttempt;
   if (elapsed < RETRY_COOLDOWN_MS) {
     const remaining = Math.ceil((RETRY_COOLDOWN_MS - elapsed) / 1000);
-    return interaction.reply({
+    await interaction.reply({
       content: `⏳ Please wait **${remaining}s** before retrying again.`,
       ephemeral: true,
     });
+    return true;
   }
 
   pending.lastAttempt = Date.now();
@@ -212,13 +217,16 @@ async function handleRetryButton(interaction) {
       if (pending.failMsg?.edit) {
         await pending.failMsg.edit({ content: `> ✅ Report already exists in DevTrack.`, components: [] }).catch(() => {});
       }
-      return interaction.editReply({ content: '✅ Report already exists in DevTrack.' });
+      await interaction.editReply({ content: '✅ Report already exists in DevTrack.' });
+      return true;
     }
     console.error('[Handler] Manual retry failed:', err.response?.data || err.message);
     await interaction.editReply({
       content: `❌ Still failing: \`${err.response?.data?.message || err.message}\`\nTry again in a minute or use \`/reopen\` once the backend is back up.`,
     });
   }
+
+  return true;
 }
 
 module.exports = { handleNewPost, handleRetryButton, pendingRetries };

@@ -6,7 +6,7 @@ const { logMessage, getAttachments } = require('./message-logger');
 const webhookServer = require('./webhook-server');
 const { runSync } = require('./sync');
 const { handleTrack } = require('./track-command');
-const { getCommandDefinition: reopenDef, handleReopen } = require('./reopen-command');
+const { getCommandDefinition: reopenDef, handleReopen, handleReopenStatusSelect } = require('./reopen-command');
 
 const client = new Client({
   intents: [
@@ -100,6 +100,11 @@ client.once(Events.ClientReady, async (c) => {
 
 // Handle slash commands and button interactions
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (interaction.isStringSelectMenu()) {
+    if (await handleReopenStatusSelect(interaction)) return;
+    return;
+  }
+
   // Handle retry buttons from failed report submissions
   if (interaction.isButton()) {
     if (interaction.customId?.startsWith('retry_report:')) {

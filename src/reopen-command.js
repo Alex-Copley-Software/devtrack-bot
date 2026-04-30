@@ -5,11 +5,20 @@
 
 const axios   = require('axios');
 const FormData = require('form-data');
+const { ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
 const { logMessage, getAttachments } = require('./message-logger');
 
 const API_URL    = process.env.API_URL    || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
 const DASHBOARD  = process.env.DASHBOARD_URL || 'https://lambent-lily-7bf643.netlify.app';
+const STATUS_OPTIONS = [
+  { label: 'Queued', value: 'queued', description: 'Move it back to the bug queue.' },
+  { label: 'Open', value: 'open', description: 'Move it to active/open reports.' },
+  { label: 'In Progress', value: 'in_progress', description: 'Move it to engineering work.' },
+  { label: 'Reviewing', value: 'reviewing', description: 'Move it to QA review.' },
+  { label: 'Resolved', value: 'resolved', description: 'Keep it resolved.' },
+  { label: 'Declined', value: 'declined', description: 'Move it to declined reports.' },
+];
 
 function getCommandDefinition() {
   return {
@@ -35,7 +44,7 @@ async function lookupByThread(threadId) {
       headers: { 'x-bot-secret': BOT_SECRET },
       timeout: 5000,
     });
-    return r.data?.reportId || null;
+    return r.data?.report || (r.data?.reportId ? { id: r.data.reportId } : null);
   } catch { return null; }
 }
 
@@ -45,8 +54,21 @@ async function lookupByMessage(messageId) {
       headers: { 'x-bot-secret': BOT_SECRET },
       timeout: 5000,
     });
-    return r.data?.reportId || null;
+    return r.data?.report || (r.data?.reportId ? { id: r.data.reportId } : null);
   } catch { return null; }
+}
+
+function dashboardLink(reportId) {
+  return `${DASHBOARD}#report/${reportId}`;
+}
+
+function buildResolvedStatusRow(reportId, userId) {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`reopen_status:${reportId}:${userId}`)
+    .setPlaceholder('Move resolved report to...')
+    .addOptions(STATUS_OPTIONS);
+
+  return new ActionRowBuilder().addComponents(menu);
 }
 
 // Fetch ALL messages in the thread oldest-first (handles pagination)
@@ -101,16 +123,32 @@ async function handleReopen(interaction, WATCHED_CHANNELS, threadReportMap) {
 
   // ── 1. Check if report already exists ────────────────────────────────────
 
-  let reportId = threadReportMap.get(thread.id) || await lookupByThread(thread.id);
+  let report = null;
+  const cachedReportId = threadReportMap.get(thread.id);
+  report = await lookupByThread(thread.id);
+  if (!report && cachedReportId) report = { id: cachedReportId };
 
   // Also try by starter message ID as fallback
-  if (!reportId) {
+  if (!report) {
     const starter = await thread.fetchStarterMessage({ cache: false }).catch(() => null);
-    if (starter) reportId = await lookupByMessage(starter.id);
+    if (starter) report = await lookupByMessage(starter.id);
   }
 
-  if (reportId) {
-    const link = `${DASHBOARD}#report/${reportId}`;
+  if (report) {
+    const link = dashboardLink(report.id);
+    threadReportMap.set(thread.id, report.id);
+
+    if (report.status === 'resolved') {
+      return interaction.editReply({
+        content: [
+          `🔁 **This report is currently resolved.**`,
+          `Do you want to move this report from **Resolved** to another status?`,
+          link,
+        ].join('\n'),
+        components: [buildResolvedStatusRow(report.id, interaction.user.id)],
+      });
+    }
+
     return interaction.editReply({
       content: `🔗 **This thread already has a DevTrack report.**\n${link}`,
     });
@@ -179,9 +217,9 @@ async function handleReopen(interaction, WATCHED_CHANNELS, threadReportMap) {
       // Race condition — someone else created it, try lookup again
       const retryId = await lookupByThread(thread.id);
       if (retryId) {
-        threadReportMap.set(thread.id, retryId);
+        threadReportMap.set(thread.id, retryId.id);
         return interaction.editReply({
-          content: `🔗 **Report already exists.**\n${DASHBOARD}#report/${retryId}`,
+          content: `🔗 **Report already exists.**\n${dashboardLink(retryId.id)}`,
         });
       }
     }
@@ -228,7 +266,7 @@ async function handleReopen(interaction, WATCHED_CHANNELS, threadReportMap) {
 
   // ── 4. Reply with the link ────────────────────────────────────────────────
 
-  const link = `${DASHBOARD}#report/${newReportId}`;
+  const link = dashboardLink(newReportId);
 
   await interaction.editReply({
     content: [
@@ -244,4 +282,55 @@ async function handleReopen(interaction, WATCHED_CHANNELS, threadReportMap) {
   ).catch(() => {});
 }
 
-module.exports = { getCommandDefinition, handleReopen };
+async function handleReopenStatusSelect(interaction) {
+  if (!interaction.isStringSelectMenu()) return false;
+  if (!interaction.customId?.startsWith('reopen_status:')) return false;
+
+  const [, reportId, allowedUserId] = interaction.customId.split(':');
+  if (interaction.user.id !== allowedUserId) {
+    await interaction.reply({
+      content: 'Only the user who ran `/reopen` can choose this status.',
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  const status = interaction.values?.[0];
+  if (!STATUS_OPTIONS.some(option => option.value === status)) {
+    await interaction.reply({ content: 'Invalid status selected.', ephemeral: true });
+    return true;
+  }
+
+  await interaction.deferUpdate();
+
+  try {
+    await axios.patch(`${API_URL}/api/bot/report/${reportId}`, {
+      status,
+      actorName: interaction.user.tag || interaction.user.username,
+      actorId: interaction.user.id,
+      detail: `Moved from resolved to ${status} via Discord /reopen by ${interaction.user.tag || interaction.user.username}`,
+    }, {
+      headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET },
+      timeout: 10000,
+    });
+
+    const selected = STATUS_OPTIONS.find(option => option.value === status);
+    await interaction.editReply({
+      content: [
+        `✅ **Report moved from Resolved to ${selected?.label || status}.**`,
+        dashboardLink(reportId),
+      ].join('\n'),
+      components: [],
+    });
+  } catch (err) {
+    console.error('[Reopen] Failed to update resolved report status:', err.response?.data || err.message);
+    await interaction.editReply({
+      content: '❌ Failed to update the report status. Please check the bot logs.',
+      components: [],
+    });
+  }
+
+  return true;
+}
+
+module.exports = { getCommandDefinition, handleReopen, handleReopenStatusSelect };

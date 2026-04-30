@@ -342,23 +342,41 @@ client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
   if (!reportType) return;
 
   console.log(`[ThreadCreate] New ${reportType} post: "${thread.name}" in channel ${parentId}`);
-  await new Promise((r) => setTimeout(r, 3000));
 
+  // Wait for Discord to settle before fetching
+  await new Promise((r) => setTimeout(r, 4000));
+
+  // Try fetchStarterMessage with increasing backoff: 2s, 4s, 6s, 8s, 10s
   let starterMessage = null;
-  for (let i = 0; i < 3; i++) {
+  const delays = [2000, 4000, 6000, 8000, 10000];
+  for (let i = 0; i < delays.length; i++) {
     try {
       starterMessage = await thread.fetchStarterMessage({ cache: false });
-      break;
+      if (starterMessage) break;
     } catch {
-      console.log(`[ThreadCreate] Starter message not ready, retrying (${i + 1}/3)...`);
-      await new Promise((r) => setTimeout(r, 2000));
+      console.log(`[ThreadCreate] Starter message not ready, retrying (${i + 1}/${delays.length}) in ${delays[i]/1000}s…`);
+      await new Promise((r) => setTimeout(r, delays[i]));
+    }
+  }
+
+  // Fallback: grab the first message from thread history
+  if (!starterMessage) {
+    console.log(`[ThreadCreate] fetchStarterMessage failed — trying message history fallback for "${thread.name}"`);
+    try {
+      const messages = await thread.messages.fetch({ limit: 5 });
+      // Starter message is the oldest one
+      starterMessage = messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp).first();
+    } catch (err) {
+      console.error(`[ThreadCreate] History fallback also failed for "${thread.name}":`, err.message);
     }
   }
 
   if (!starterMessage) {
-    console.error(`[ThreadCreate] Could not fetch starter message for "${thread.name}" — skipping.`);
+    console.error(`[ThreadCreate] Could not fetch starter message for "${thread.name}" after all retries — skipping.`);
     return;
   }
+
+  console.log(`[ThreadCreate] Got starter message for "${thread.name}" (id: ${starterMessage.id})`);
 
   try {
     const reportId = await handleNewPost({ thread, starterMessage, reportType, client });

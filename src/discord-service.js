@@ -68,6 +68,14 @@ function buildMessage(action, opts = {}) {
   const ping = mention ? `<@${mention}>` : '';
 
   switch (action) {
+    case 'declined':
+      return [
+        `${ping} 📋 **Thank you for your report.**`,
+        `> After review, we've decided not to action this at this time.`,
+        devNotes ? `> **Reason:** ${devNotes}` : '',
+        `> We appreciate you taking the time to report this.`,
+      ].filter(Boolean).join('\n');
+
     case 'in_progress':
       return [
         `${ping} 🔧 **This report is now being worked on.**`,
@@ -164,8 +172,6 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
     if (action === 'accepted'    && tagMap.accepted)  newTags.push(tagMap.accepted);
     if (action === 'declined'    && tagMap.declined)  newTags.push(tagMap.declined);
     if (action === 'resolved'    && tagMap.resolved)  newTags.push(tagMap.resolved);
-    if (action === 'in_progress' && tagMap.accepted)  newTags.push(tagMap.accepted);
-    if (action === 'reviewing'   && tagMap.accepted)  newTags.push(tagMap.accepted);
     if (bugLevel && tagMap[bugLevel]) newTags.push(tagMap[bugLevel]);
 
     // Discord allows max 5 tags per thread

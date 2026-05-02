@@ -4,7 +4,6 @@ const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } =
 const { handleNewPost, handleRetryButton } = require('./handler');
 const { logMessage, getAttachments } = require('./message-logger');
 const webhookServer = require('./webhook-server');
-const { runSync } = require('./sync');
 const { handleTrack } = require('./track-command');
 const { getCommandDefinition: reopenDef, handleReopen, handleReopenStatusSelect } = require('./reopen-command');
 
@@ -41,10 +40,6 @@ const threadReportMap = new Map();
 // Register slash commands
 async function registerCommands() {
   const commands = [
-    new SlashCommandBuilder()
-      .setName('sync')
-      .setDescription('Scan forum channels and add any missing posts to the DevTrack queue')
-      .toJSON(),
     new SlashCommandBuilder()
       .setName('syncstars')
       .setDescription('Sync star reaction counts from all suggestion posts')
@@ -340,24 +335,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 
-  if (interaction.commandName === 'sync') {
-    // Only allow admins or users with Manage Guild permission
-    if (!interaction.memberPermissions?.has('ManageGuild')) {
-      return interaction.reply({ content: '❌ You need the Manage Server permission to run this.', flags: 64 });
-    }
-
-    await interaction.reply({ content: '🔄 Scanning forum channels for existing posts... this may take a moment.', flags: 64 });
-
-    try {
-      const result = await runSync(client, WATCHED_CHANNELS, threadReportMap);
-      await interaction.editReply(
-        `✅ **Sync complete!**\n> Added to queue: **${result.totalAdded}**\n> Already existed: **${result.totalSkipped}**\n> Failed: **${result.totalFailed}**`
-      );
-    } catch (err) {
-      console.error('[Sync] Error:', err);
-      await interaction.editReply('❌ Sync failed — check the bot logs.');
-    }
-  }
 });
 
 // New forum post created

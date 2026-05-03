@@ -2,7 +2,7 @@
 // Simple HTTP server the backend calls to trigger Discord actions
 
 const http = require('http');
-const { applyThreadAction } = require('./discord-service');
+const { applyThreadAction, sendServerAlert } = require('./discord-service');
 
 const PORT = process.env.BOT_WEBHOOK_PORT || 3002;
 const SECRET = process.env.BOT_SECRET;
@@ -29,8 +29,7 @@ function start() {
       return;
     }
 
-    // Only handle POST /action
-    if (req.method !== 'POST' || req.url !== '/action') {
+    if (req.method !== 'POST' || !['/action', '/alert'].includes(req.url)) {
       res.writeHead(404);
       res.end();
       return;
@@ -38,6 +37,23 @@ function start() {
 
     try {
       const body = await parseBody(req);
+      if (req.url === '/alert') {
+        const { kind, count, oldestAge, url } = body;
+        if (!kind) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'kind is required' }));
+          return;
+        }
+
+        console.log(`[Webhook] Received alert: ${kind} count: ${count}`);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+
+        await sendServerAlert({ kind, count, oldestAge, url });
+        return;
+      }
+
       const { threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner } = body;
 
       if (!threadId || !action) {

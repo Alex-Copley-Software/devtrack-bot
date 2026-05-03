@@ -1,7 +1,13 @@
 // discord-service.js
 // Handles all outbound Discord actions: tagging threads, posting replies, mentioning users
 
-const { Client, GatewayIntentBits } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, Client, EmbedBuilder, GatewayIntentBits } = require('discord.js');
+
+const DASHBOARD_URL = process.env.DASHBOARD_URL || 'https://lambent-lily-7bf643.netlify.app';
+const REVIEWER_ALERT_CHANNEL_ID = process.env.REVIEWER_ALERT_CHANNEL_ID || '1500338092077482107';
+const REVIEWER_ROLE_ID = process.env.REVIEWER_ROLE_ID || '1500338695906267388';
+const QA_ALERT_CHANNEL_ID = process.env.QA_ALERT_CHANNEL_ID || '1500338135077490720';
+const QA_ROLE_ID = process.env.QA_ROLE_ID || '1499133772187041893';
 
 // ── Tag IDs per channel ───────────────────────────────────────────────────────
 // Each forum channel has its own unique tag IDs
@@ -207,4 +213,53 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
   }
 }
 
-module.exports = { applyThreadAction };
+async function sendServerAlert({ kind, count, oldestAge, url }) {
+  try {
+    const client = await getClient();
+    const isQueue = kind === 'queue_backlog';
+    const channelId = isQueue ? REVIEWER_ALERT_CHANNEL_ID : QA_ALERT_CHANNEL_ID;
+    const roleId = isQueue ? REVIEWER_ROLE_ID : QA_ROLE_ID;
+    const channel = await client.channels.fetch(channelId);
+    if (!channel) {
+      console.error(`[Discord] Alert channel ${channelId} not found`);
+      return;
+    }
+
+    const dashboardUrl = url || DASHBOARD_URL;
+    const title = isQueue ? 'Review Queue Backlog' : 'QA Review Needed';
+    const description = isQueue
+      ? `There are now **${count}** reports waiting to be accepted.`
+      : `A report was sent to QA Review. There are now **${count}** reports waiting for QA.`;
+    const color = isQueue ? 0xfbbf24 : 0x60a5fa;
+
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setDescription(description)
+      .setColor(color)
+      .addFields(
+        { name: isQueue ? 'Queued Reports' : 'QA Reports', value: String(count || 0), inline: true },
+        { name: 'Oldest Waiting', value: oldestAge || 'Just now', inline: true },
+        { name: 'Dashboard', value: `[Open DevTrack](${dashboardUrl})`, inline: false },
+      )
+      .setTimestamp(new Date());
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel('Open DevTrack')
+        .setStyle(ButtonStyle.Link)
+        .setURL(dashboardUrl)
+    );
+
+    await channel.send({
+      content: `<@&${roleId}>`,
+      embeds: [embed],
+      components: [row],
+      allowedMentions: { roles: [roleId] },
+    });
+    console.log(`[Discord] Sent ${kind} alert to ${channelId}`);
+  } catch (err) {
+    console.error('[Discord] Failed to send server alert:', err.message);
+  }
+}
+
+module.exports = { applyThreadAction, sendServerAlert };

@@ -20,6 +20,7 @@ function buildAttachmentList(message) {
     url: att.url,
     filename: att.name,
     contentType: att.contentType || 'application/octet-stream',
+    size: att.size || 0,
   }));
 }
 

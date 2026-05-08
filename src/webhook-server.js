@@ -2,7 +2,7 @@
 // Simple HTTP server the backend calls to trigger Discord actions
 
 const http = require('http');
-const { applyThreadAction, sendServerAlert } = require('./discord-service');
+const { applyThreadAction, sendServerAlert, updateImportReaction } = require('./discord-service');
 
 const PORT = process.env.BOT_WEBHOOK_PORT || 3002;
 const SECRET = process.env.BOT_SECRET;
@@ -29,7 +29,7 @@ function start() {
       return;
     }
 
-    if (req.method !== 'POST' || !['/action', '/alert'].includes(req.url)) {
+    if (req.method !== 'POST' || !['/action', '/alert', '/import-status'].includes(req.url)) {
       res.writeHead(404);
       res.end();
       return;
@@ -51,6 +51,21 @@ function start() {
         res.end(JSON.stringify({ success: true }));
 
         await sendServerAlert({ kind, count, oldestAge, url });
+        return;
+      }
+
+      if (req.url === '/import-status') {
+        const { channelId, messageId, status } = body;
+        if (!channelId || !messageId || !status) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'channelId, messageId, and status are required' }));
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+
+        await updateImportReaction({ channelId, messageId, status });
         return;
       }
 

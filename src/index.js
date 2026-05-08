@@ -410,7 +410,7 @@ client.on(Events.MessageCreate, async (message) => {
       const importId = await handleImportMessage(message);
       if (importId) {
         console.log(`[Imports] Queued import ${importId} from message ${message.id}`);
-        await message.react('✅').catch(() => {});
+        await message.react('➖').catch(() => {});
       }
     } catch (err) {
       if (err.response?.status === 409) return;

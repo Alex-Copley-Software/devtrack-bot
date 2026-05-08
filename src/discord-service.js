@@ -153,7 +153,7 @@ let _client = null;
 async function getClient() {
   if (_client && _client.isReady()) return _client;
   return new Promise((resolve, reject) => {
-    const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+    const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
     client.once('ready', () => { _client = client; resolve(client); });
     client.once('error', reject);
     client.login(process.env.DISCORD_TOKEN).catch(reject);
@@ -213,6 +213,30 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
   }
 }
 
+async function updateImportReaction({ channelId, messageId, status }) {
+  try {
+    const client = await getClient();
+    const channel = await client.channels.fetch(channelId);
+    if (!channel?.messages?.fetch) {
+      console.error(`[Discord] Import channel ${channelId} not found or cannot fetch messages`);
+      return;
+    }
+    const message = await channel.messages.fetch(messageId);
+    if (!message) {
+      console.error(`[Discord] Import message ${messageId} not found`);
+      return;
+    }
+
+    if (status === 'imported') {
+      await message.reactions.cache.get('➖')?.users.remove(client.user.id).catch(() => {});
+      await message.react('✅');
+      console.log(`[Discord] Import message ${messageId} marked imported`);
+    }
+  } catch (err) {
+    console.error('[Discord] Failed to update import reaction:', err.message);
+  }
+}
+
 async function sendServerAlert({ kind, count, oldestAge, url }) {
   try {
     const client = await getClient();
@@ -262,4 +286,4 @@ async function sendServerAlert({ kind, count, oldestAge, url }) {
   }
 }
 
-module.exports = { applyThreadAction, sendServerAlert };
+module.exports = { applyThreadAction, sendServerAlert, updateImportReaction };

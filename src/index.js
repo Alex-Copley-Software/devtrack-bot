@@ -6,6 +6,7 @@ const { logMessage, getAttachments } = require('./message-logger');
 const webhookServer = require('./webhook-server');
 const { handleTrack } = require('./track-command');
 const { getCommandDefinition: reopenDef, handleReopen, handleReopenStatusSelect } = require('./reopen-command');
+const { handleImportMessage } = require('./import-handler');
 
 const client = new Client({
   intents: [
@@ -31,6 +32,7 @@ if (process.env.CHANNEL_CONFIG) {
 // Always include individual env vars as fallback/addition
 if (process.env.BUG_REPORT_CHANNEL_ID) WATCHED_CHANNELS[process.env.BUG_REPORT_CHANNEL_ID] = 'bug';
 if (process.env.SUGGESTIONS_CHANNEL_ID) WATCHED_CHANNELS[process.env.SUGGESTIONS_CHANNEL_ID] = 'suggestion';
+if (process.env.IMPORTS_CHANNEL_ID) WATCHED_CHANNELS[process.env.IMPORTS_CHANNEL_ID] = 'import';
 
 const API_URL = process.env.API_URL || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
@@ -343,6 +345,7 @@ client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
   const parentId = thread.parentId;
   const reportType = WATCHED_CHANNELS[parentId];
   if (!reportType) return;
+  if (reportType === 'import') return;
 
   console.log(`[ThreadCreate] New ${reportType} post: "${thread.name}" in channel ${parentId}`);
 
@@ -400,12 +403,29 @@ client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
 
 // New message in tracked thread
 client.on(Events.MessageCreate, async (message) => {
-  if (!message.channel?.isThread()) return;
   if (message.author.bot) return;
+  if (process.env.IMPORTS_CHANNEL_ID && message.channelId === process.env.IMPORTS_CHANNEL_ID) {
+    if (!message.attachments?.size) return;
+    try {
+      const importId = await handleImportMessage(message);
+      if (importId) {
+        console.log(`[Imports] Queued import ${importId} from message ${message.id}`);
+        await message.react('✅').catch(() => {});
+      }
+    } catch (err) {
+      if (err.response?.status === 409) return;
+      console.error('[Imports] Failed to queue import:', err.response?.data || err.message);
+      await message.react('⚠️').catch(() => {});
+    }
+    return;
+  }
+
+  if (!message.channel?.isThread()) return;
 
   const thread = message.channel;
   const parentId = thread.parentId;
   if (!WATCHED_CHANNELS[parentId]) return;
+  if (WATCHED_CHANNELS[parentId] === 'import') return;
 
   const threadId = thread.id;
   const reportId = threadReportMap.get(threadId);

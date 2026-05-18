@@ -6,7 +6,7 @@ const BOT_SECRET = process.env.BOT_SECRET;
 function buildAttachmentList(message) {
   if (!message?.attachments?.size) return [];
   return [...message.attachments.values()].map(att => ({
-    url: att.url,
+    url: att.proxyURL || att.url,
     filename: att.name || 'import-file',
     contentType: att.contentType || 'application/octet-stream',
     size: att.size || 0,

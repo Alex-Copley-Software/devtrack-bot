@@ -95,6 +95,13 @@ function buildMessage(action, opts = {}) {
         `> Our testers are verifying the fix. We'll let you know when it's resolved.`,
       ].filter(Boolean).join('\n');
 
+    case 'on_hold':
+      return [
+        `${ping} **This report is currently on hold.**`,
+        `> QA cannot fully test this yet, so it will stay paused until it is ready to review again.`,
+        devNotes ? `> **Notes:** ${devNotes}` : '',
+      ].filter(Boolean).join('\n');
+
     case 'accepted':
       return [
         `${ping} ✅ **Your report has been reviewed and accepted.**`,

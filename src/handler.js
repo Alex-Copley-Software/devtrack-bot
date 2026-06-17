@@ -40,10 +40,6 @@ function buildForm({ thread, starterMessage, reportType }) {
   form.append('discordThreadId', thread.id);
   form.append('discordChannel',  `#${channelName}`);
   form.append('discordMessageId', starterMessage?.id || thread.id);
-  if (reportType === 'suggestion') {
-    form.append('queued',  'false');
-    form.append('status',  'open');
-  }
   if (attachments.length > 0) {
     form.append('attachmentUrls', JSON.stringify(attachments));
   }
@@ -78,7 +74,10 @@ async function onSuccess({ reportId, thread, starterMessage, reportType }) {
     reportType === 'suggestion'
       ? `> 💡 **Suggestion received.** Thank you for the feedback — the engineers will review this shortly.\n> React with ✅ below to get pinged when there's an update.`
       : `> 🐛 **Bug report received.** Thank you for reporting — the engineers will get to this shortly.\n> React with ✅ below to get pinged when there's an update.`
-  ).catch(() => null);
+  ).catch(err => {
+    console.error(`[Handler] Failed to send receipt message in thread ${thread.id}:`, err.message);
+    return null;
+  });
 
   if (confirmMsg) {
     await confirmMsg.react(NOTIFY_EMOJI).catch(() => {});

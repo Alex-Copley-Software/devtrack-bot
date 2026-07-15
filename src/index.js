@@ -7,6 +7,7 @@ const webhookServer = require('./webhook-server');
 const { handleTrack } = require('./track-command');
 const { getCommandDefinition: reopenDef, handleReopen, handleReopenStatusSelect } = require('./reopen-command');
 const { handleImportMessage } = require('./import-handler');
+const { handleSyncReport } = require('./sync-report-command');
 
 const client = new Client({
   intents: [
@@ -69,6 +70,10 @@ async function registerCommands() {
       .setName('reopen')
       .setDescription('Re-open or locate the DevTrack report for this thread')
       .toJSON(),
+    new SlashCommandBuilder()
+      .setName('syncreport')
+      .setDescription('Add this thread to DevTrack if it was missed by automatic tracking')
+      .toJSON(),
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -122,6 +127,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.commandName === 'reopen') {
     await handleReopen(interaction, WATCHED_CHANNELS, threadReportMap);
+    return;
+  }
+
+  if (interaction.commandName === 'syncreport') {
+    await handleSyncReport(interaction, WATCHED_CHANNELS, threadReportMap);
     return;
   }
 

@@ -102,6 +102,7 @@ client.once(Events.ClientReady, async (c) => {
 
 // Handle slash commands and button interactions
 client.on(Events.InteractionCreate, async (interaction) => {
+ try {
   if (interaction.isStringSelectMenu()) {
     if (await handleReopenStatusSelect(interaction)) return;
     return;
@@ -347,6 +348,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 
+ } catch (err) {
+  // Never let a single bad interaction (e.g. an expired/already-acknowledged
+  // token — DiscordAPIError 10062) crash the whole bot process.
+  console.error('[InteractionCreate] Unhandled error:', err.message);
+  const reply = { content: '❌ Something went wrong handling that. Please try again.', ephemeral: true };
+  try {
+    if (interaction.deferred || interaction.replied) await interaction.editReply(reply);
+    else await interaction.reply(reply);
+  } catch (replyErr) {
+    console.error('[InteractionCreate] Could not notify user of the error:', replyErr.message);
+  }
+ }
 });
 
 // New forum post created

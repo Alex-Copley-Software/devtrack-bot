@@ -8,6 +8,7 @@ const REVIEWER_ALERT_CHANNEL_ID = process.env.REVIEWER_ALERT_CHANNEL_ID || '1500
 const REVIEWER_ROLE_ID = process.env.REVIEWER_ROLE_ID || '1500338695906267388';
 const QA_ALERT_CHANNEL_ID = process.env.QA_ALERT_CHANNEL_ID || '1500338135077490720';
 const QA_ROLE_ID = process.env.QA_ROLE_ID || '1499133772187041893';
+const PATCH_FIXES_CHANNEL_ID = process.env.PATCH_FIXES_CHANNEL_ID || '1536725066166046841';
 
 // ── Tag IDs per channel ───────────────────────────────────────────────────────
 // Each forum channel has its own unique tag IDs
@@ -293,4 +294,38 @@ async function sendServerAlert({ kind, count, oldestAge, url }) {
   }
 }
 
-module.exports = { applyThreadAction, sendServerAlert, updateImportReaction };
+// Posts a per-card patch note to the patch-fixes channel whenever a report
+// moves into QA Review — a plain summary of what was fixed, no dashboard
+// link, so it reads like an internal changelog entry.
+async function sendPatchFixNotice({ title, reportType, bugLevel, category, assigneeName, summary }) {
+  try {
+    const client = await getClient();
+    const channel = await client.channels.fetch(PATCH_FIXES_CHANNEL_ID);
+    if (!channel) {
+      console.error(`[Discord] Patch-fixes channel ${PATCH_FIXES_CHANNEL_ID} not found`);
+      return;
+    }
+
+    const typeLabel = reportType === 'crash' ? 'Crash' : reportType === 'suggestion' ? 'Suggestion' : 'Bug';
+    const fields = [
+      { name: 'Type', value: typeLabel, inline: true },
+      bugLevel ? { name: 'Severity', value: bugLevel.charAt(0).toUpperCase() + bugLevel.slice(1), inline: true } : null,
+      category ? { name: 'Category', value: category, inline: true } : null,
+      assigneeName ? { name: 'Fixed By', value: assigneeName, inline: true } : null,
+    ].filter(Boolean);
+
+    const embed = new EmbedBuilder()
+      .setTitle(title || 'Untitled report')
+      .setDescription(summary || 'No summary provided.')
+      .setColor(0x34d399)
+      .addFields(fields)
+      .setTimestamp(new Date());
+
+    await channel.send({ embeds: [embed] });
+    console.log(`[Discord] Sent patch-fix notice to ${PATCH_FIXES_CHANNEL_ID}: ${title}`);
+  } catch (err) {
+    console.error('[Discord] Failed to send patch-fix notice:', err.message);
+  }
+}
+
+module.exports = { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice };

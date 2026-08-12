@@ -9,6 +9,7 @@ const REVIEWER_ROLE_ID = process.env.REVIEWER_ROLE_ID || '1500338695906267388';
 const QA_ALERT_CHANNEL_ID = process.env.QA_ALERT_CHANNEL_ID || '1500338135077490720';
 const QA_ROLE_ID = process.env.QA_ROLE_ID || '1499133772187041893';
 const PATCH_FIXES_CHANNEL_ID = process.env.PATCH_FIXES_CHANNEL_ID || '1536725066166046841';
+const TESTERS_ROLE_ID = process.env.TESTERS_ROLE_ID || '1425326818444967957';
 
 // ── Tag IDs per channel ───────────────────────────────────────────────────────
 // Each forum channel has its own unique tag IDs
@@ -328,4 +329,25 @@ async function sendPatchFixNotice({ title, reportType, bugLevel, category, assig
   }
 }
 
-module.exports = { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice };
+// Pings the testers role in the patch-fixes channel — called once per
+// "Send to QA" action (single card or batch), after the patch-fix notice(s)
+// for that action have been posted, not once per card.
+async function sendTesterPing() {
+  try {
+    const client = await getClient();
+    const channel = await client.channels.fetch(PATCH_FIXES_CHANNEL_ID);
+    if (!channel) {
+      console.error(`[Discord] Patch-fixes channel ${PATCH_FIXES_CHANNEL_ID} not found`);
+      return;
+    }
+    await channel.send({
+      content: `<@&${TESTERS_ROLE_ID}> New patch fixes are ready to test above.`,
+      allowedMentions: { roles: [TESTERS_ROLE_ID] },
+    });
+    console.log(`[Discord] Pinged testers role in ${PATCH_FIXES_CHANNEL_ID}`);
+  } catch (err) {
+    console.error('[Discord] Failed to ping testers:', err.message);
+  }
+}
+
+module.exports = { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice, sendTesterPing };

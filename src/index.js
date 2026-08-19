@@ -8,6 +8,15 @@ const { handleTrack } = require('./track-command');
 const { getCommandDefinition: reopenDef, handleReopen, handleReopenStatusSelect } = require('./reopen-command');
 const { handleImportMessage } = require('./import-handler');
 const { handleSyncReport } = require('./sync-report-command');
+const {
+  getCommandDefinitions: creditCommandDefs,
+  handleCredit,
+  handleRequestCredit,
+  handleCreditButton,
+  escalateStaleCreditRequests,
+} = require('./credit-commands');
+
+const CREDIT_ESCALATION_POLL_MS = 15 * 60 * 1000;
 
 const client = new Client({
   intents: [
@@ -74,6 +83,7 @@ async function registerCommands() {
       .setName('syncreport')
       .setDescription('Add this thread to DevTrack if it was missed by automatic tracking')
       .toJSON(),
+    ...creditCommandDefs(),
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -98,6 +108,10 @@ client.once(Events.ClientReady, async (c) => {
   webhookServer.start();
   await registerCommands();
 
+  escalateStaleCreditRequests(client).catch(err => console.error('[CreditEscalation] Initial poll failed:', err.message));
+  setInterval(() => {
+    escalateStaleCreditRequests(client).catch(err => console.error('[CreditEscalation] Poll failed:', err.message));
+  }, CREDIT_ESCALATION_POLL_MS);
 });
 
 // Handle slash commands and button interactions
@@ -114,7 +128,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const { handleNewPost } = require('./handler');
       const retryDeps = { handleNewPost, client, WATCHED_CHANNELS, threadReportMap };
       await handleRetryButton(interaction, retryDeps);
+      return;
     }
+    if (await handleCreditButton(interaction)) return;
     return;
   }
 
@@ -133,6 +149,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.commandName === 'syncreport') {
     await handleSyncReport(interaction, WATCHED_CHANNELS, threadReportMap);
+    return;
+  }
+
+  if (interaction.commandName === 'credit') {
+    await handleCredit(interaction, WATCHED_CHANNELS);
+    return;
+  }
+
+  if (interaction.commandName === 'requestcredit') {
+    await handleRequestCredit(interaction, WATCHED_CHANNELS);
     return;
   }
 
@@ -165,6 +191,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (!map[key]) map[key] = { name, count: 0, minor: 0, moderate: 0, major: 0 };
           map[key].count++;
           if (r.bugLevel) map[key][r.bugLevel] = (map[key][r.bugLevel] || 0) + 1;
+
+          // Credited co-finder gets the same +1 (and severity breakdown),
+          // additive to the reporter's own count, not a transfer.
+          if (r.creditedDiscordUserId || r.creditedDiscordUser) {
+            const creditKey = r.creditedDiscordUserId || r.creditedDiscordUser;
+            const creditName = r.creditedDiscordUser || 'Unknown';
+            if (!map[creditKey]) map[creditKey] = { name: creditName, count: 0, minor: 0, moderate: 0, major: 0 };
+            map[creditKey].count++;
+            if (r.bugLevel) map[creditKey][r.bugLevel] = (map[creditKey][r.bugLevel] || 0) + 1;
+          }
         });
         // Return ALL reporters sorted, no slice
         return Object.values(map).sort((a, b) => b.count - a.count);

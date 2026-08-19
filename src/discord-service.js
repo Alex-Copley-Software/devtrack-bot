@@ -10,6 +10,7 @@ const QA_ALERT_CHANNEL_ID = process.env.QA_ALERT_CHANNEL_ID || '1500338135077490
 const QA_ROLE_ID = process.env.QA_ROLE_ID || '1499133772187041893';
 const PATCH_FIXES_CHANNEL_ID = process.env.PATCH_FIXES_CHANNEL_ID || '1536725066166046841';
 const TESTERS_ROLE_ID = process.env.TESTERS_ROLE_ID || '1425326818444967957';
+const SENIOR_TESTER_ROLE_ID = process.env.SENIOR_TESTER_ROLE_ID || '1424553941722726550';
 
 // ── Tag IDs per channel ───────────────────────────────────────────────────────
 // Each forum channel has its own unique tag IDs
@@ -350,4 +351,4 @@ async function sendTesterPing() {
   }
 }
 
-module.exports = { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice, sendTesterPing };
+module.exports = { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice, sendTesterPing, SENIOR_TESTER_ROLE_ID };

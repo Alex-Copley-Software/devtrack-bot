@@ -7,7 +7,7 @@
 
 const axios = require('axios');
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { SENIOR_TESTER_ROLE_ID } = require('./discord-service');
+const { SENIOR_TESTER_ROLE_ID, sendCreditAuditNotice } = require('./discord-service');
 
 const API_URL    = process.env.API_URL    || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
@@ -95,6 +95,16 @@ async function handleCredit(interaction, WATCHED_CHANNELS) {
       content: `✅ <@${targetUser.id}> has been credited for finding this bug, alongside <@${interaction.user.id}>.`,
       allowedMentions: { users: [targetUser.id] },
     });
+
+    sendCreditAuditNotice({
+      kind: 'credited',
+      reportId: report.id,
+      reportTitle: report.title,
+      actorId: interaction.user.id,
+      actorTag: interaction.user.tag,
+      targetId: targetUser.id,
+      targetTag: targetUser.tag,
+    }).catch(() => {});
   } catch (err) {
     console.error('[Credit] Failed to credit user:', err.response?.data || err.message);
     await interaction.editReply({ content: '❌ Failed to credit that user. Please check the bot logs.' });
@@ -184,6 +194,16 @@ async function handleRequestCredit(interaction, WATCHED_CHANNELS) {
   } catch (err) {
     console.error('[RequestCredit] Failed to record prompt message id:', err.response?.data || err.message);
   }
+
+  sendCreditAuditNotice({
+    kind: 'requested',
+    reportId: report.id,
+    reportTitle: report.title,
+    actorId: interaction.user.id,
+    actorTag: interaction.user.tag,
+    ownerId: report.discordUserId || null,
+    ownerTag: report.discordUser || null,
+  }).catch(() => {});
 }
 
 // ── confirm / deny buttons ───────────────────────────────────────────────────
@@ -251,6 +271,15 @@ async function handleCreditButton(interaction) {
       : `❌ Credit request from <@${request.requestedDiscordUserId}> was denied by <@${interaction.user.id}>.`;
 
     await interaction.editReply({ content: resultLine, components: [] });
+
+    sendCreditAuditNotice({
+      kind: isConfirm ? 'approved' : 'denied',
+      reportId: request.reportId,
+      targetId: request.requestedDiscordUserId,
+      targetTag: request.requestedDiscordUser,
+      resolvedById: interaction.user.id,
+      resolvedByTag: interaction.user.tag,
+    }).catch(() => {});
   } catch (err) {
     if (err.response?.status === 409) {
       await interaction.editReply({ content: `This request was already **${err.response.data?.request?.status || 'resolved'}**.`, components: [] });

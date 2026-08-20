@@ -11,6 +11,7 @@ const QA_ROLE_ID = process.env.QA_ROLE_ID || '1499133772187041893';
 const PATCH_FIXES_CHANNEL_ID = process.env.PATCH_FIXES_CHANNEL_ID || '1536725066166046841';
 const TESTERS_ROLE_ID = process.env.TESTERS_ROLE_ID || '1425326818444967957';
 const SENIOR_TESTER_ROLE_ID = process.env.SENIOR_TESTER_ROLE_ID || '1424553941722726550';
+const CREDIT_AUDIT_CHANNEL_ID = process.env.CREDIT_AUDIT_CHANNEL_ID || '1539971207477207081';
 
 // ── Tag IDs per channel ───────────────────────────────────────────────────────
 // Each forum channel has its own unique tag IDs
@@ -351,4 +352,60 @@ async function sendTesterPing() {
   }
 }
 
-module.exports = { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice, sendTesterPing, SENIOR_TESTER_ROLE_ID };
+// Posts a note to the senior-staff credit-audit channel every time /credit or
+// /requestcredit is used, and when a request is resolved — so seniors can
+// spot people farming leaderboard score by crediting each other.
+async function sendCreditAuditNotice({ kind, reportId, reportTitle, actorTag, actorId, targetTag, targetId, ownerTag, ownerId, resolvedByTag, resolvedById }) {
+  try {
+    const client = await getClient();
+    const channel = await client.channels.fetch(CREDIT_AUDIT_CHANNEL_ID);
+    if (!channel) {
+      console.error(`[Discord] Credit audit channel ${CREDIT_AUDIT_CHANNEL_ID} not found`);
+      return;
+    }
+
+    let title, description, color;
+    switch (kind) {
+      case 'credited':
+        title = '✅ Direct Credit Given';
+        description = `<@${actorId}> (**${actorTag}**) credited <@${targetId}> (**${targetTag}**) on their own report.`;
+        color = 0x34d399;
+        break;
+      case 'requested':
+        title = '🙋 Credit Requested';
+        description = `<@${actorId}> (**${actorTag}**) requested credit on a report owned by ${ownerId ? `<@${ownerId}> (**${ownerTag}**)` : 'unknown'}.`;
+        color = 0xfbbf24;
+        break;
+      case 'approved':
+        title = '✅ Credit Request Approved';
+        description = `<@${targetId}> (**${targetTag}**)'s credit request was approved by <@${resolvedById}> (**${resolvedByTag}**).`;
+        color = 0x34d399;
+        break;
+      case 'denied':
+        title = '❌ Credit Request Denied';
+        description = `<@${targetId}> (**${targetTag}**)'s credit request was denied by <@${resolvedById}> (**${resolvedByTag}**).`;
+        color = 0xf87171;
+        break;
+      default:
+        return;
+    }
+
+    const dashboardUrl = reportId ? `${DASHBOARD_URL}#report/${reportId}` : null;
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setDescription(description)
+      .setColor(color)
+      .addFields({ name: 'Report', value: reportTitle || reportId || 'Unknown', inline: false })
+      .setTimestamp(new Date());
+
+    const components = dashboardUrl ? [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setLabel('Open Report').setStyle(ButtonStyle.Link).setURL(dashboardUrl)
+    )] : [];
+
+    await channel.send({ embeds: [embed], components, allowedMentions: { parse: [] } });
+  } catch (err) {
+    console.error('[Discord] Failed to send credit audit notice:', err.message);
+  }
+}
+
+module.exports = { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice, sendTesterPing, sendCreditAuditNotice, SENIOR_TESTER_ROLE_ID };

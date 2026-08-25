@@ -408,4 +408,30 @@ async function sendCreditAuditNotice({ kind, reportId, reportTitle, actorTag, ac
   }
 }
 
-module.exports = { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice, sendTesterPing, sendCreditAuditNotice, SENIOR_TESTER_ROLE_ID };
+// Pings a thread that tried to submit a bug report while reports were
+// paused — called once per attempt during the resume sweep.
+async function sendPausedThreadPing({ threadId, discordUserId }) {
+  try {
+    const client = await getClient();
+    const thread = await client.channels.fetch(threadId).catch(() => null);
+    if (!thread) {
+      console.error(`[Discord] Paused-thread ${threadId} not found`);
+      return false;
+    }
+
+    const mention = discordUserId ? `<@${discordUserId}> ` : '';
+    await thread.send(
+      [
+        `${mention}🟢 **Bug reports are back open.**`,
+        `> This thread was created while reports were paused, so it wasn't logged as a DevTrack ticket.`,
+        `> If this is still happening, please open a **new** bug report thread — and check the change logs first to make sure it's still a bug and not intended behavior.`,
+      ].join('\n')
+    );
+    return true;
+  } catch (err) {
+    console.error(`[Discord] Failed to ping paused thread ${threadId}:`, err.message);
+    return false;
+  }
+}
+
+module.exports = { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice, sendTesterPing, sendCreditAuditNotice, sendPausedThreadPing, SENIOR_TESTER_ROLE_ID };

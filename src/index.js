@@ -15,6 +15,7 @@ const {
   handleCreditButton,
   escalateStaleCreditRequests,
 } = require('./credit-commands');
+const reportPause = require('./report-pause');
 
 const CREDIT_ESCALATION_POLL_MS = 15 * 60 * 1000;
 
@@ -107,6 +108,7 @@ client.once(Events.ClientReady, async (c) => {
   console.log(`  API          → ${process.env.API_URL}`);
   webhookServer.start();
   await registerCommands();
+  await reportPause.syncPauseState();
 
   escalateStaleCreditRequests(client).catch(err => console.error('[CreditEscalation] Initial poll failed:', err.message));
   setInterval(() => {
@@ -405,6 +407,25 @@ client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
   const reportType = WATCHED_CHANNELS[parentId];
   if (!reportType) return;
   if (reportType === 'import') return;
+
+  if (reportType === 'bug' && reportPause.isPaused()) {
+    console.log(`[ThreadCreate] Reports paused — not logging "${thread.name}"`);
+    let starter = null;
+    try {
+      await new Promise((r) => setTimeout(r, 1500));
+      starter = await thread.fetchStarterMessage({ cache: false });
+    } catch { /* best-effort — notice/attempt still work without author info */ }
+
+    await reportPause.postPausedNotice(thread, starter?.author?.id);
+    await reportPause.registerPausedAttempt({
+      threadId: thread.id,
+      channelId: parentId,
+      discordUserId: starter?.author?.id || '',
+      discordUser: starter?.author?.tag || 'unknown',
+      title: thread.name,
+    });
+    return;
+  }
 
   console.log(`[ThreadCreate] New ${reportType} post: "${thread.name}" in channel ${parentId}`);
 

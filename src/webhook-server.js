@@ -3,6 +3,7 @@
 
 const http = require('http');
 const { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice, sendTesterPing } = require('./discord-service');
+const reportPause = require('./report-pause');
 
 const PORT = process.env.BOT_WEBHOOK_PORT || 3002;
 const SECRET = process.env.BOT_SECRET;
@@ -29,7 +30,7 @@ function start() {
       return;
     }
 
-    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers'].includes(req.url)) {
+    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers', '/reports-pause-state'].includes(req.url)) {
       res.writeHead(404);
       res.end();
       return;
@@ -74,6 +75,20 @@ function start() {
         res.end(JSON.stringify({ success: true }));
 
         await sendTesterPing();
+        return;
+      }
+
+      if (req.url === '/reports-pause-state') {
+        const { paused } = body;
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+
+        reportPause.setPaused(paused);
+        console.log(`[Webhook] Report pause state set to: ${paused}`);
+        if (!paused) {
+          await reportPause.pingPendingAttempts();
+        }
         return;
       }
 

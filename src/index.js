@@ -190,8 +190,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           // Use discordUserId if available, fallback to discordUser string
           const key = r.discordUserId || r.discordUser || 'unknown';
           const name = r.discordUser || 'Unknown';
-          if (!map[key]) map[key] = { name, count: 0, minor: 0, moderate: 0, major: 0 };
-          map[key].count++;
+          if (!map[key]) map[key] = { name, count: 0, minor: 0, moderate: 0, major: 0, insignificant: 0 };
+          // Insignificant reports are tracked per-reporter but don't add to
+          // their total leaderboard count.
+          if (r.bugLevel !== 'insignificant') map[key].count++;
           if (r.bugLevel) map[key][r.bugLevel] = (map[key][r.bugLevel] || 0) + 1;
 
           // Credited co-finder gets the same +1 (and severity breakdown),
@@ -199,8 +201,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (r.creditedDiscordUserId || r.creditedDiscordUser) {
             const creditKey = r.creditedDiscordUserId || r.creditedDiscordUser;
             const creditName = r.creditedDiscordUser || 'Unknown';
-            if (!map[creditKey]) map[creditKey] = { name: creditName, count: 0, minor: 0, moderate: 0, major: 0 };
-            map[creditKey].count++;
+            if (!map[creditKey]) map[creditKey] = { name: creditName, count: 0, minor: 0, moderate: 0, major: 0, insignificant: 0 };
+            if (r.bugLevel !== 'insignificant') map[creditKey].count++;
             if (r.bugLevel) map[creditKey][r.bugLevel] = (map[creditKey][r.bugLevel] || 0) + 1;
           }
         });
@@ -258,7 +260,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const medal = medals[rank] || ('**#' + (rank+1) + '**');
           const parts = [r.minor && (r.minor + 'm'), r.moderate && (r.moderate + 'mod'), r.major && (r.major + 'maj')].filter(Boolean).join(' ');
           const partStr = parts ? ' *(' + parts + ')*' : '';
-          return medal + ' **' + r.name + '** — ' + r.count + ' reports' + partStr + '\n' + makeBar(r);
+          // Insignificant reports are tracked but don't count toward the
+          // total, so they're shown separately, not folded into the bar.
+          const insigStr = r.insignificant ? ' · ' + r.insignificant + ' insignificant' : '';
+          return medal + ' **' + r.name + '** — ' + r.count + ' reports' + partStr + insigStr + '\n' + makeBar(r);
         }).join('\n');
 
         return {

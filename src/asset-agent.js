@@ -49,6 +49,8 @@ function onMessage(message) {
   const isThread = !!channel?.isThread?.();
   const parentId = isThread ? channel.parentId : null;
   const categoryId = (isThread ? channel.parent?.parentId : channel?.parentId) || null;
+  // The review channel is never read, even when its category is allowlisted.
+  if (REVIEW_CHANNEL_ID && (message.channelId === REVIEW_CHANNEL_ID || parentId === REVIEW_CHANNEL_ID)) return;
   if (![message.channelId, parentId, categoryId].some(id => id && allowed.has(id))) return;
   buffer.push({
     id: message.id,

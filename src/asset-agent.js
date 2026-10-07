@@ -41,16 +41,20 @@ async function refreshConfig() {
 }
 
 // Called for every message the bot sees. Only messages in an allowlisted
-// channel, or a thread under one, are kept, and only the fields the agent needs.
+// channel, a thread or forum post under one, or anything under an
+// allowlisted category are kept, and only the fields the agent needs.
 function onMessage(message) {
   if (!ENABLED || !allowed.size || message.author?.bot || !message.guildId) return;
   const channel = message.channel;
-  const parentId = channel?.isThread?.() ? channel.parentId : null;
-  if (!allowed.has(message.channelId) && !(parentId && allowed.has(parentId))) return;
+  const isThread = !!channel?.isThread?.();
+  const parentId = isThread ? channel.parentId : null;
+  const categoryId = (isThread ? channel.parent?.parentId : channel?.parentId) || null;
+  if (![message.channelId, parentId, categoryId].some(id => id && allowed.has(id))) return;
   buffer.push({
     id: message.id,
     channelId: message.channelId,
     parentChannelId: parentId,
+    categoryId,
     guildId: message.guildId,
     authorDiscordId: message.author.id,
     authorName: message.member?.displayName || message.author.username,

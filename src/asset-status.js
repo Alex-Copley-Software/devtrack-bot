@@ -1,15 +1,17 @@
 // asset-status.js
-// Shows each dev's availability on their forum post by prefixing its title:
+// Shows each dev's availability on their forum (or forum post) by prefixing its name:
 //
 //   🟢  has open asset tasks
 //   🟡  nothing assigned, ready to be tasked
 //
 // The tracker decides who is tasked (GET /api/bot/assets/dev-status); the bot
-// only renames. A post belongs to a dev when the roster entry names it
-// (Status post, on the Team view), or else when the post's title starts with
-// the dev's name and it sits in a forum the asset agent reads.
+// only renames. The roster entry says where the dot goes (Status post, on the
+// Team view): a dev's own forum channel, or a single post. A dev with nothing
+// set falls back to a post whose title starts with their name, in a forum the
+// asset agent reads. Dots the bot left anywhere else are taken off again.
 //
-// Does nothing unless ASSET_STATUS_POSTS=true. Needs Manage Threads.
+// Does nothing unless ASSET_STATUS_POSTS=true. Needs Manage Channels for
+// forums and Manage Threads for posts.
 
 const axios = require('axios');
 const { ChannelType } = require('discord.js');
@@ -57,8 +59,13 @@ async function forumsUnder(client, ids) {
   return [...forums.values()];
 }
 
-async function rename(thread, wanted) {
-  if (thread.name === wanted) return 'same';
+const dotOf = name => (String(name || '').match(/^\s*(🟢|🟡)/u) || [])[1] || '';
+
+// dot: TASKED, FREE, or '' to take a dot off. Compared by dot, not by the
+// whole name, because Discord rewrites some channel names (spaces to dashes).
+async function rename(thread, dot) {
+  if (dotOf(thread.name) === dot) return 'same';
+  const wanted = `${dot ? `${dot} ` : ''}${base(thread.name)}`.slice(0, 100);
   const now = Date.now();
   const recent = (renames.get(thread.id) || []).filter(t => now - t < RENAME_WINDOW_MS);
   if (recent.length >= 2) return 'waiting'; // picked up on a later sync
@@ -72,7 +79,7 @@ async function rename(thread, wanted) {
   } catch (err) {
     if (!complained.has(thread.id)) {
       complained.add(thread.id);
-      console.error(`[AssetStatus] Could not rename "${thread.name}" (${thread.id}): ${err.message}. The bot needs Manage Threads in that forum.`);
+      console.error(`[AssetStatus] Could not rename "${thread.name}" (${thread.id}): ${err.message}. The bot needs Manage Channels (forums) or Manage Threads (posts) there.`);
     }
     return 'failed';
   }
@@ -80,7 +87,8 @@ async function rename(thread, wanted) {
 
 async function sync(client, allowedIds) {
   const { devs } = await api('/dev-status');
-  const forums = await forumsUnder(client, allowedIds());
+  const pinned = new Set(devs.map(d => d.discordThreadId).filter(Boolean));
+  const forums = await forumsUnder(client, [...allowedIds(), ...pinned]);
   const posts = [];
   for (const forum of forums) {
     const active = await forum.threads.fetchActive().catch(() => null);
@@ -94,22 +102,28 @@ async function sync(client, allowedIds) {
   for (const dev of [...devs].sort((a, b) => b.name.length - a.name.length)) {
     let mine = [];
     if (dev.discordThreadId) {
-      const thread = await client.channels.fetch(dev.discordThreadId).catch(() => null);
-      if (thread?.isThread?.() && !thread.archived) mine = [thread];
+      // The roster names the place: a forum channel, or one post.
+      const target = await client.channels.fetch(dev.discordThreadId).catch(() => null);
+      if (target && typeof target.setName === 'function' && !target.archived) mine = [target];
     } else {
       mine = posts.filter(p => !claimed.has(p.id) && titleMatches(p.name, dev.name));
     }
     if (!mine.length) { unmatched.push(dev.name); continue; }
     for (const thread of mine) {
       claimed.add(thread.id);
-      const wanted = `${dev.available ? FREE : TASKED} ${base(thread.name)}`.slice(0, 100);
-      await rename(thread, wanted);
+      await rename(thread, dev.available ? FREE : TASKED);
       matched.push(`${dev.name} -> ${base(thread.name)} (${dev.available ? 'free' : `${dev.openTasks} open`})`);
     }
   }
 
+  // Take the dot off posts and forums that are no longer anyone's status place.
+  let cleared = 0;
+  for (const stale of [...posts, ...forums]) {
+    if (!claimed.has(stale.id) && dotOf(stale.name) && await rename(stale, '') === 'renamed') cleared++;
+  }
+
   summary = { matched: matched.sort(), unmatched: unmatched.sort(), at: new Date() };
-  const text = `${matched.length} post(s) across ${forums.length} forum(s); no post found for: ${unmatched.join(', ') || 'nobody'}`;
+  const text = `${matched.length} status channel(s); ${cleared} old dot(s) removed; nothing to mark for: ${unmatched.join(', ') || 'nobody'}`;
   if (text !== lastSummary) { console.log(`[AssetStatus] ${text}`); lastSummary = text; }
 }
 

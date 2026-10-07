@@ -123,17 +123,20 @@ function suggestionEmbed(suggestion, footerNote) {
   if (evidence.length) {
     embed.addFields({ name: 'From', value: evidence.map(e => `[${e.authorName || 'message'}](${e.url})`).join(' · ').slice(0, 1000), inline: true });
   }
+  // A flag proposes no change, so its buttons say what they do: note it, or wave it off.
+  const flag = suggestion.type === 'flag_unknown';
   const state = footerNote
     || (pending ? 'Waiting for a lead or manager'
-      : `${suggestion.status === 'rejected' ? 'Rejected' : 'Accepted'}${suggestion.resolvedVia === 'auto' ? ' automatically' : suggestion.resolvedByName ? ` by ${suggestion.resolvedByName}` : ''}`);
+      : `${flag ? (suggestion.status === 'rejected' ? 'Dismissed' : 'Acknowledged') : suggestion.status === 'rejected' ? 'Rejected' : 'Accepted'}${suggestion.resolvedVia === 'auto' ? ' automatically' : suggestion.resolvedByName ? ` by ${suggestion.resolvedByName}` : ''}`);
   embed.setFooter({ text: state });
   return embed;
 }
 
-function suggestionButtons(id) {
+function suggestionButtons({ id, type }) {
+  const flag = type === 'flag_unknown';
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`asset_sug:accept:${id}`).setLabel('Accept').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`asset_sug:reject:${id}`).setLabel('Reject').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`asset_sug:accept:${id}`).setLabel(flag ? 'Acknowledge' : 'Accept').setStyle(flag ? ButtonStyle.Primary : ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`asset_sug:reject:${id}`).setLabel(flag ? 'Dismiss' : 'Reject').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setLabel('Open inbox').setStyle(ButtonStyle.Link).setURL(`${DASHBOARD}/assets/#/suggestions`),
   );
 }
@@ -147,7 +150,7 @@ async function postSuggestions(client, list) {
     try {
       const sent = await channel.send({
         embeds: [suggestionEmbed(suggestion)],
-        components: suggestion.status === 'pending' ? [suggestionButtons(suggestion.id)] : [],
+        components: suggestion.status === 'pending' ? [suggestionButtons(suggestion)] : [],
         allowedMentions: { parse: [] },
       });
       await api('post', `/suggestions/${suggestion.id}/posted`, { channelId: channel.id, messageId: sent.id }).catch(() => {});

@@ -31,7 +31,7 @@ function getCommandDefinitions() {
       .setName('assets')
       .setDescription('Asset tracker: update progress, your tasks, and item checklists')
       .addSubcommand(sub => sub.setName('update').setDescription('Summary of an update')
-        .addIntegerOption(opt => opt.setName('number').setDescription('Update # (defaults to the one in development)').setRequired(false)))
+        .addNumberOption(opt => opt.setName('number').setDescription('Update # (defaults to the one in development)').setRequired(false)))
       .addSubcommand(sub => sub.setName('mine').setDescription('Your open asset tasks'))
       .addSubcommand(sub => sub.setName('item').setDescription("An item's checklist and progress")
         .addStringOption(opt => opt.setName('name').setDescription('Item name, e.g. Aizen').setRequired(true)))
@@ -50,7 +50,7 @@ const openButton = () => new ActionRowBuilder().addComponents(
 const taskLine = t => `${MARK[t.status] || '⚪'} \`#${t.ref}\` **${t.internalName}** · ${t.deliverable}${t.dueDate ? ` · due ${t.dueDate}` : ''}`;
 
 async function showUpdate(interaction) {
-  const number = interaction.options.getInteger('number');
+  const number = interaction.options.getNumber('number');
   const { update, disciplines, attention } = await api('get', '/update', { params: number === null ? {} : { number } });
   const embed = new EmbedBuilder()
     .setTitle(`Update #${update.number} · ${update.name}`)

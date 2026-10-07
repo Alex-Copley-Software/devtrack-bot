@@ -4,7 +4,7 @@
 //   /assets update [number]      summary of an update (the one in development by default)
 //   /assets mine                 the caller's open tasks
 //   /assets item name:<name>     an item's checklist and progress
-//   /assets task id:<n> status:<status>   update one of your own tasks
+//   /assets task id:<n> status:<status> [reason:<text>]   update one of your own tasks (Blocked needs a reason)
 //
 // Registered only when ASSETS_ENABLED=true on the bot.
 
@@ -49,7 +49,8 @@ function getCommandDefinitions() {
       .addSubcommand(sub => sub.setName('task').setDescription('Update the status of one of your tasks')
         .addIntegerOption(opt => opt.setName('id').setDescription('Task number, e.g. 412').setRequired(true))
         .addStringOption(opt => opt.setName('status').setDescription('New status').setRequired(true)
-          .addChoices(...STATUSES.map(s => ({ name: s, value: s })))))
+          .addChoices(...STATUSES.map(s => ({ name: s, value: s }))))
+        .addStringOption(opt => opt.setName('reason').setDescription('Required for Blocked: what are you waiting on?').setRequired(false).setMaxLength(300)))
       .toJSON(),
   ];
 }
@@ -130,10 +131,11 @@ async function showItem(interaction) {
 
 async function setTaskStatus(interaction) {
   const { task, previousStatus } = await api('post', '/task-status', {
-    data: { ref: interaction.options.getInteger('id'), status: interaction.options.getString('status'), discordUserId: interaction.user.id },
+    data: { ref: interaction.options.getInteger('id'), status: interaction.options.getString('status'), reason: interaction.options.getString('reason') || '', discordUserId: interaction.user.id },
   });
   return interaction.editReply({
-    content: `${MARK[task.status] || ''} \`#${task.ref}\` **${task.internalName}** · ${task.deliverable}: ${previousStatus} → **${task.status}**`,
+    content: `${MARK[task.status] || ''} \`#${task.ref}\` **${task.internalName}** · ${task.deliverable}: ${previousStatus} → **${task.status}**${task.blockedReason ? `
+Blocked on: ${task.blockedReason}` : ''}`,
   });
 }
 

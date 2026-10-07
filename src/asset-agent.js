@@ -322,4 +322,4 @@ function start(client) {
   setInterval(() => tick(client).catch(() => {}), TICK_MS);
 }
 
-module.exports = { start, onMessage, handleButton, suggestionEmbed };
+module.exports = { start, onMessage, handleButton, suggestionEmbed, allowedIds: () => [...allowed] };

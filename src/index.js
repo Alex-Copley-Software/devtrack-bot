@@ -17,6 +17,7 @@ const {
 } = require('./credit-commands');
 const reportPause = require('./report-pause');
 const assetAgent = require('./asset-agent');
+const assetStatus = require('./asset-status');
 const { getCommandDefinitions: assetCommandDefs, handleAssets } = require('./assets-command');
 
 const CREDIT_ESCALATION_POLL_MS = 15 * 60 * 1000;
@@ -113,6 +114,7 @@ client.once(Events.ClientReady, async (c) => {
   await registerCommands();
   await reportPause.syncPauseState();
   assetAgent.start(client); // no-op unless ASSET_AGENT_ENABLED=true
+  assetStatus.start(client, assetAgent.allowedIds); // no-op unless ASSET_STATUS_POSTS=true
 
   escalateStaleCreditRequests(client).catch(err => console.error('[CreditEscalation] Initial poll failed:', err.message));
   setInterval(() => {

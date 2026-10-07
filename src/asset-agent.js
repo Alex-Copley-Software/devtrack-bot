@@ -24,6 +24,8 @@ const headers = { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET
 const api = (method, path, data, timeout = 15000) => axios({ method, url: `${API_URL}/api/bot/assets${path}`, data, headers, timeout }).then(r => r.data);
 
 let allowed = new Set();
+let selfTestSeen; // undefined until the first config load, so an old request is not replayed on restart
+let discordClient = null;
 let buffer = [];
 let ticking = false;
 
@@ -33,6 +35,11 @@ async function refreshConfig() {
   try {
     const config = await api('get', '/agent/config');
     allowed = new Set(config.enabled ? config.channelIds : []);
+    const token = config.selfTestToken || null;
+    if (selfTestSeen !== undefined && token && token !== selfTestSeen && discordClient) {
+      selfTest(discordClient).catch(err => console.error('[AssetAgent] Self-test failed:', err.message));
+    }
+    selfTestSeen = token;
   } catch (err) {
     // Keep the last known allowlist; a 404 just means the backend flag is off.
     if (err.response?.status !== 404) console.error('[AssetAgent] Could not refresh the channel allowlist:', err.message);
@@ -175,6 +182,106 @@ async function handleButton(interaction) {
   return true;
 }
 
+// ── self-test ─────────────────────────────────────────────────────────────────
+
+// Proves the two things that cannot be checked from the backend: that the bot
+// can read the allowlisted channels, and that it can post in the review
+// channel. It then shows what the agent would propose for the most recent
+// conversation it read. Read-only: nothing is stored and the tracker is not touched.
+async function readable(channel, limit) {
+  const fetched = await channel.messages.fetch({ limit });
+  return [...fetched.values()].filter(m => !m.author?.bot).sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+}
+
+async function selfTest(client) {
+  const lines = [];
+  const samples = []; // { name, messages }
+  const probe = async channel => {
+    if (!channel || channel.id === REVIEW_CHANNEL_ID || channel.parentId === REVIEW_CHANNEL_ID) return;
+    const name = `#${channel.name}`;
+    try {
+      if (channel.threads && !channel.messages) {
+        // Forum: its posts are threads.
+        const active = await channel.threads.fetchActive();
+        const posts = [...active.threads.values()].sort((a, b) => Number(BigInt(b.lastMessageId || 0) - BigInt(a.lastMessageId || 0))).slice(0, 3);
+        let count = 0;
+        for (const post of posts) {
+          const messages = await readable(post, 15);
+          count += messages.length;
+          if (messages.length) samples.push({ name: `${name} / ${post.name}`, messages });
+        }
+        lines.push(`OK  ${name} (forum): ${active.threads.size} open post(s), read ${count} message(s) from the latest ${posts.length}`);
+      } else if (channel.messages) {
+        const messages = await readable(channel, 25);
+        if (messages.length) samples.push({ name, messages });
+        lines.push(`OK  ${name}: read ${messages.length} recent message(s)`);
+      }
+    } catch (err) {
+      lines.push(`FAILED  ${name}: ${err.message}`);
+    }
+  };
+
+  for (const id of allowed) {
+    const channel = await client.channels.fetch(id).catch(() => null);
+    if (!channel) { lines.push(`FAILED  ${id}: the bot cannot see this channel or category`); continue; }
+    if (channel.children) {
+      const children = [...channel.children.cache.values()];
+      lines.push(`Category "${channel.name}": ${children.length} channel(s)`);
+      for (const child of children) await probe(child);
+    } else {
+      await probe(channel);
+    }
+  }
+  if (!allowed.size) lines.push('No channels or categories are on the allowlist yet, so there was nothing to read. Add one under Assets, Agent settings.');
+
+  // What the agent makes of the most recent conversation it could read.
+  let agent = 'Skipped: no messages were read.';
+  const latest = samples.sort((a, b) => b.messages.at(-1).createdTimestamp - a.messages.at(-1).createdTimestamp)[0];
+  if (latest) {
+    try {
+      const result = await api('post', '/agent/dry-run', {
+        messages: latest.messages.slice(-25).map(m => ({
+          id: m.id, channelId: m.channelId, guildId: m.guildId, authorDiscordId: m.author.id,
+          authorName: m.member?.displayName || m.author.username, content: m.content || '',
+          postedAt: new Date(m.createdTimestamp).toISOString(),
+        })),
+      }, 4 * 60 * 1000);
+      const head = `Read ${latest.messages.length} message(s) from ${latest.name} against a tracker of ${result.tracker?.tasks ?? 0} task(s).`;
+      if (result.empty) agent = `${head} They had no text to analyse.`;
+      else if (!result.relevant) agent = `${head} The filter judged them not about assets, so nothing would be proposed.`;
+      else {
+        agent = [head, `It would propose ${result.proposals.length} change(s)${result.dropped.length ? ` (${result.dropped.length} more discarded by validation)` : ''}:`,
+          ...result.proposals.slice(0, 8).map(p => `- ${p.summary} (${Math.round(p.confidence * 100)}%)`)].join('\n');
+      }
+      agent += `\nModel cost: $${(result.costUsd || 0).toFixed(4)}`;
+    } catch (err) {
+      agent = `FAILED: ${err.response?.data?.error || err.message}`;
+    }
+  }
+
+  console.log(`[AssetAgent] Self-test\n${lines.join('\n')}\n${agent}`);
+  if (!REVIEW_CHANNEL_ID) { console.warn('[AssetAgent] Self-test: no review channel set, result is only in the log.'); return; }
+  try {
+    const review = await client.channels.fetch(REVIEW_CHANNEL_ID);
+    await review.send({
+      embeds: [new EmbedBuilder()
+        .setTitle('Asset agent self-test')
+        .setDescription('This is a test. Nothing was stored and nothing in the tracker was changed.')
+        .setColor(lines.some(l => l.startsWith('FAILED')) ? 0xf87171 : 0x34d399)
+        .addFields(
+          { name: 'Reading', value: lines.join('\n').slice(0, 1024) || 'Nothing to read' },
+          { name: 'What the agent made of it', value: agent.slice(0, 1024) },
+          { name: 'Posting', value: 'OK  this message is the proof the bot can post here.' },
+        )
+        .setTimestamp(new Date())],
+      allowedMentions: { parse: [] },
+    });
+    console.log('[AssetAgent] Self-test posted to the review channel');
+  } catch (err) {
+    console.error(`[AssetAgent] Self-test could not post to the review channel ${REVIEW_CHANNEL_ID}: ${err.message}`);
+  }
+}
+
 // ── tick ──────────────────────────────────────────────────────────────────────
 
 let lastState = null;
@@ -202,7 +309,14 @@ async function tick(client) {
 function start(client) {
   if (!ENABLED) return;
   console.log(`[AssetAgent] Enabled. Review channel: ${REVIEW_CHANNEL_ID || '(not set, web inbox only)'}`);
-  refreshConfig().then(() => console.log(`[AssetAgent] Reading ${allowed.size} allowlisted channel(s)`));
+  discordClient = client;
+  refreshConfig().then(() => {
+    console.log(`[AssetAgent] Reading ${allowed.size} allowlisted channel(s)`);
+    // ASSET_AGENT_SELFTEST=true runs the self-test once on startup.
+    if (String(process.env.ASSET_AGENT_SELFTEST || '').toLowerCase() === 'true') {
+      selfTest(client).catch(err => console.error('[AssetAgent] Self-test failed:', err.message));
+    }
+  });
   setInterval(refreshConfig, CONFIG_REFRESH_MS);
   setInterval(() => flush().catch(() => {}), FLUSH_MS);
   setInterval(() => tick(client).catch(() => {}), TICK_MS);

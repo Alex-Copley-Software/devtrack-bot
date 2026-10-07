@@ -16,6 +16,17 @@ const BOT_SECRET = process.env.BOT_SECRET;
 const DASHBOARD = process.env.DASHBOARD_URL || 'https://lambent-lily-7bf643.netlify.app';
 const ENABLED = String(process.env.ASSETS_ENABLED || '').toLowerCase() === 'true';
 
+// Members with one of these roles can use /assets mine and nothing else.
+// Discord cannot restrict a single subcommand, so the bot checks it.
+const MINE_ONLY_ROLE_IDS = String(process.env.ASSETS_MINE_ONLY_ROLE_IDS || '').split(',').map(v => v.trim()).filter(Boolean);
+function isMineOnly(interaction) {
+  if (!MINE_ONLY_ROLE_IDS.length) return false;
+  if (interaction.memberPermissions?.has('Administrator')) return false;
+  const roles = interaction.member?.roles;
+  const has = id => (roles?.cache ? roles.cache.has(id) : Array.isArray(roles) && roles.includes(id));
+  return MINE_ONLY_ROLE_IDS.some(has);
+}
+
 const STATUSES = ['Not Started', 'In Progress', 'Review', 'Done', 'Blocked', 'N/A'];
 const MARK = { 'Not Started': '⚪', 'In Progress': '🔵', Review: '🟣', Done: '✅', Blocked: '⛔', 'N/A': '➖' };
 
@@ -128,6 +139,9 @@ async function setTaskStatus(interaction) {
 
 async function handleAssets(interaction) {
   const sub = interaction.options.getSubcommand();
+  if (sub !== 'mine' && isMineOnly(interaction)) {
+    return interaction.reply({ content: 'Your role can use `/assets mine` only.', ephemeral: true });
+  }
   // Personal views and edits are only shown to the caller.
   await interaction.deferReply({ ephemeral: sub === 'mine' || sub === 'task' });
   try {

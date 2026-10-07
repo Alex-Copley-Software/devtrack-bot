@@ -16,6 +16,8 @@ const {
   escalateStaleCreditRequests,
 } = require('./credit-commands');
 const reportPause = require('./report-pause');
+const assetAgent = require('./asset-agent');
+const { getCommandDefinitions: assetCommandDefs, handleAssets } = require('./assets-command');
 
 const CREDIT_ESCALATION_POLL_MS = 15 * 60 * 1000;
 
@@ -85,6 +87,7 @@ async function registerCommands() {
       .setDescription('Add this thread to DevTrack if it was missed by automatic tracking')
       .toJSON(),
     ...creditCommandDefs(),
+    ...assetCommandDefs(), // empty unless ASSETS_ENABLED=true
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -109,6 +112,7 @@ client.once(Events.ClientReady, async (c) => {
   webhookServer.start();
   await registerCommands();
   await reportPause.syncPauseState();
+  assetAgent.start(client); // no-op unless ASSET_AGENT_ENABLED=true
 
   escalateStaleCreditRequests(client).catch(err => console.error('[CreditEscalation] Initial poll failed:', err.message));
   setInterval(() => {
@@ -133,6 +137,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
     if (await handleCreditButton(interaction)) return;
+    if (await assetAgent.handleButton(interaction)) return;
     return;
   }
 
@@ -156,6 +161,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.commandName === 'credit') {
     await handleCredit(interaction, WATCHED_CHANNELS);
+    return;
+  }
+
+  if (interaction.commandName === 'assets') {
+    await handleAssets(interaction);
     return;
   }
 
@@ -489,6 +499,8 @@ client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
 // New message in tracked thread
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+  // Asset agent ingest: only allowlisted channels, and it never throws.
+  try { assetAgent.onMessage(message); } catch (err) { console.error('[AssetAgent] onMessage failed:', err.message); }
   if (process.env.IMPORTS_CHANNEL_ID && message.channelId === process.env.IMPORTS_CHANNEL_ID) {
     if (!message.attachments?.size) return;
     try {

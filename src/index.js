@@ -18,6 +18,7 @@ const {
 const reportPause = require('./report-pause');
 const assetAgent = require('./asset-agent');
 const assetStatus = require('./asset-status');
+const qaCheck = require('./qa-check');
 const { getCommandDefinitions: assetCommandDefs, handleAssets } = require('./assets-command');
 
 const CREDIT_ESCALATION_POLL_MS = 15 * 60 * 1000;
@@ -110,6 +111,7 @@ client.once(Events.ClientReady, async (c) => {
     console.log(`  ${type.padEnd(12)} → ${id}`);
   });
   console.log(`  API          → ${process.env.API_URL}`);
+  qaCheck.setClient(client);
   webhookServer.start();
   await registerCommands();
   await reportPause.syncPauseState();
@@ -140,7 +142,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (await handleCreditButton(interaction)) return;
     if (await assetAgent.handleButton(interaction)) return;
+    if (await qaCheck.handleButton(interaction)) return;
     return;
+  }
+
+  if (interaction.isModalSubmit()) {
+    if (await qaCheck.handleModal(interaction)) return;
   }
 
   if (!interaction.isChatInputCommand()) return;

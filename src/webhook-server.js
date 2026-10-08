@@ -4,6 +4,7 @@
 const http = require('http');
 const { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice, sendTesterPing } = require('./discord-service');
 const reportPause = require('./report-pause');
+const qaCheck = require('./qa-check');
 
 const PORT = process.env.BOT_WEBHOOK_PORT || 3002;
 const SECRET = process.env.BOT_SECRET;
@@ -30,7 +31,7 @@ function start() {
       return;
     }
 
-    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers', '/reports-pause-state'].includes(req.url)) {
+    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers', '/reports-pause-state', '/qa-check', '/qa-check-update'].includes(req.url)) {
       res.writeHead(404);
       res.end();
       return;
@@ -52,6 +53,20 @@ function start() {
         res.end(JSON.stringify({ success: true }));
 
         await sendServerAlert({ kind, count, oldestAge, url });
+        return;
+      }
+
+      // Tester QA: ask the reporter to confirm a fix, or retire that request.
+      if (req.url === '/qa-check' || req.url === '/qa-check-update') {
+        if (!body.threadId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'threadId is required' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+        if (req.url === '/qa-check') await qaCheck.postCheck(body);
+        else await qaCheck.updateCheck(body);
         return;
       }
 

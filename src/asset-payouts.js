@@ -99,6 +99,7 @@ function adminEmbed(p) {
     .setTimestamp(new Date(p.createdAt || Date.now()));
   if (p.text) embed.addFields({ name: 'They wrote', value: `>>> ${String(p.text).slice(0, 900)}` });
   if (p.requestUrl) embed.addFields({ name: 'Request', value: `[Open the message](${p.requestUrl})`, inline: true });
+  if (p.robloxNote && p.status === 'pending') embed.addFields({ name: 'Different Roblox account from the one on file', value: String(p.robloxNote).slice(0, 500) });
   const dupes = Array.isArray(p.duplicates) ? p.duplicates : [];
   if (dupes.length) {
     embed.addFields({

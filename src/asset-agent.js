@@ -10,6 +10,8 @@
 const axios = require('axios');
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } = require('discord.js');
 
+const assetPayouts = require('./asset-payouts');
+
 const API_URL = process.env.API_URL || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
 const DASHBOARD = process.env.DASHBOARD_URL || 'https://lambent-lily-7bf643.netlify.app';
@@ -42,6 +44,7 @@ async function refreshConfig() {
       admins: new Set((config.assistant?.admins || []).map(a => a.id)),
       channels: new Set((config.assistant?.channels || []).map(c => c.id)),
     };
+    assetPayouts.configure(config.enabled ? config.payouts : null);
     checkAssistantChannels().catch(() => {});
     const token = config.selfTestToken || null;
     if (selfTestSeen !== undefined && token && token !== selfTestSeen && discordClient) {
@@ -84,6 +87,13 @@ function onMessage(message) {
     attachments: [...(message.attachments?.values?.() || [])].map(a => ({ name: a.name, url: a.url })),
     postedAt: new Date(message.createdTimestamp).toISOString(),
   };
+
+  // A dev's Payments post is for payout requests only: it is not chatter for
+  // the suggestion pipeline, and the assistant does not answer there.
+  if (inScope && assetPayouts.isPaymentsPost(channel)) {
+    assetPayouts.handleMessage(message, payload).catch(err => console.error('[AssetPayouts] failed:', err.message));
+    return;
+  }
 
   // An approved person talking to the bot: always in an assistant channel,
   // elsewhere only when they mention it or reply to it.
@@ -378,6 +388,8 @@ async function tick(client) {
       console.log(`[AssetAgent] Batch ${batch.batchId} (${batch.messages} msgs): ${batch.error ? `failed: ${batch.error}` : batch.relevant ? `${batch.suggestions} suggestion(s)` : 'not about assets'}`);
     }
     await postSuggestions(client, result.toPost || []);
+    // Payouts marked on the Assets page: tick the dev's message and tell them.
+    for (const payout of result.payoutSync || []) await assetPayouts.applyUpdate(client, payout);
   } catch (err) {
     if (err.response?.status !== 404) console.error('[AssetAgent] Tick failed:', err.response?.data?.error || err.message);
   } finally {

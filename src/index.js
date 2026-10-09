@@ -19,6 +19,7 @@ const reportPause = require('./report-pause');
 const assetAgent = require('./asset-agent');
 const assetStatus = require('./asset-status');
 const qaCheck = require('./qa-check');
+const assetPayouts = require('./asset-payouts');
 const { getCommandDefinitions: assetCommandDefs, handleAssets } = require('./assets-command');
 
 const CREDIT_ESCALATION_POLL_MS = 15 * 60 * 1000;
@@ -143,11 +144,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (await handleCreditButton(interaction)) return;
     if (await assetAgent.handleButton(interaction)) return;
     if (await qaCheck.handleButton(interaction)) return;
+    if (await assetPayouts.handleButton(interaction)) return;
     return;
   }
 
   if (interaction.isModalSubmit()) {
     if (await qaCheck.handleModal(interaction)) return;
+    if (await assetPayouts.handleModal(interaction)) return;
   }
 
   if (!interaction.isChatInputCommand()) return;

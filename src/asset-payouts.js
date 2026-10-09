@@ -74,6 +74,14 @@ const STATE = {
   declined: { color: 0xf87171, label: 'Declined' },
 };
 
+function robloxField(account) {
+  const v = String(account || '');
+  if (!v) return 'Not given';
+  if (/^https?:\/\//i.test(v)) return `[Profile](${v})`;
+  if (/^\d+$/.test(v)) return `[ID ${v}](https://www.roblox.com/users/${v}/profile)`;
+  return `[${v}](https://www.roblox.com/search/users?keyword=${encodeURIComponent(v)})`;
+}
+
 function adminEmbed(p) {
   const state = STATE[p.status] || STATE.pending;
   const tasks = (p.tasks || []).map(t => `\`#${t.ref}\` ${t.item} · ${t.deliverable}`).join('\n');
@@ -83,6 +91,7 @@ function adminEmbed(p) {
     .setDescription(`**${p.amountText || 'No amount given'}** for **${p.description || 'unspecified work'}**`)
     .addFields(
       { name: 'Dev', value: p.discordUserId ? `<@${p.discordUserId}>` : p.devName || 'Unknown', inline: true },
+      { name: 'Roblox', value: robloxField(p.robloxAccount), inline: true },
       { name: 'Item', value: p.itemName || 'Not matched', inline: true },
       { name: 'Status', value: `${state.label}${p.status !== 'pending' && p.resolvedByName ? ` by ${p.resolvedByName}` : ''}`, inline: true },
       { name: 'Tracker tasks', value: tasks.slice(0, 1000) || 'None matched. Check what this covers before paying.' },

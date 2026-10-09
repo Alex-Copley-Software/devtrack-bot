@@ -14,7 +14,7 @@
 
 const axios = require('axios');
 const {
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, StringSelectMenuBuilder,
 } = require('discord.js');
 
 const API_URL = process.env.API_URL || 'http://localhost:3001';
@@ -116,7 +116,9 @@ function adminEmbed(p) {
     });
   }
   if (p.status === 'paid') {
-    embed.addFields({ name: 'Revenue', value: p.revenueExpenseId ? `Logged as expense #${p.revenueExpenseId}` : p.revenueNote || 'Not logged' });
+    embed.addFields({ name: 'Revenue', value: p.revenueExpenseId
+      ? `Logged as expense #${p.revenueExpenseId}, ${Array.isArray(p.costSharePersonIds) && p.costSharePersonIds.length ? `split across ${p.costSharePersonIds.length} chosen ${p.costSharePersonIds.length === 1 ? 'person' : 'people'}` : 'default split'}`
+      : p.revenueNote || 'Not logged' });
   }
   if (p.status === 'declined' && p.declineReason) embed.addFields({ name: 'Why', value: String(p.declineReason).slice(0, 500) });
   return embed;
@@ -209,10 +211,10 @@ async function applyUpdate(client, p) {
 
 // ── buttons ───────────────────────────────────────────────────────────────────
 
-async function decide(interaction, id, decision, reason) {
+async function decide(interaction, id, decision, reason, costSharePersonIds) {
   try {
     const p = await api('post', `/payouts/${id}/resolve`, {
-      decision, reason,
+      decision, reason, costSharePersonIds,
       discordUserId: interaction.user.id,
       actorName: interaction.member?.displayName || interaction.user.username,
       isAdministrator: !!interaction.memberPermissions?.has('Administrator'),
@@ -233,9 +235,52 @@ async function handleButton(interaction) {
         .setCustomId('reason').setLabel('Why? (the dev sees this)').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(280))));
     return true;
   }
+  // "Paid out" on the card. When the Revenue page is on, the payout is logged
+  // there as an expense, and an expense needs to know who splits its cost:
+  // ask, privately, before anything is marked.
+  if (action === 'paid') {
+    const people = await api('get', '/payout-audience').then(r => r.people || []).catch(() => []);
+    if (!people.length) {
+      await interaction.deferUpdate();
+      const error = await decide(interaction, id, 'paid');
+      if (error) await interaction.followUp({ content: error, ephemeral: true }).catch(() => {});
+      return true;
+    }
+    const shown = people.slice(0, 25); // a Discord menu holds 25
+    await interaction.reply({
+      ephemeral: true,
+      content: `**Who pays for this one?** It will be logged on the Revenue page as an expense.\nPick the people who split it, or use the default: an even split across all ${people.length} manual-payout shareholders.${people.length > 25 ? '\n-# Only the first 25 are listed here; for anyone else, edit the expense on the Revenue page afterwards.' : ''}`,
+      components: [
+        new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+          .setCustomId(`asset_pay_who:${id}`).setPlaceholder('Choose who splits it').setMinValues(1).setMaxValues(shown.length)
+          .addOptions(shown.map(p => ({ label: String(p.name).slice(0, 100), value: String(p.id) })))),
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`asset_pay:paidall:${id}`).setLabel(`Default: split across all ${people.length}`).setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`asset_pay:cancel:${id}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)),
+      ],
+    });
+    return true;
+  }
+  if (action === 'cancel') {
+    await interaction.update({ content: 'Cancelled. Nothing was marked.', components: [] });
+    return true;
+  }
+  // 'paidall': the default split, chosen from the private prompt.
   await interaction.deferUpdate();
   const error = await decide(interaction, id, 'paid');
-  if (error) await interaction.followUp({ content: error, ephemeral: true }).catch(() => {});
+  await interaction.editReply({ content: error || 'Marked as paid, split across everyone. The dev has been told.', components: [] }).catch(() => {});
+  return true;
+}
+
+// The people picked in the private "who pays" menu.
+async function handleSelect(interaction) {
+  if (!interaction.isStringSelectMenu() || !interaction.customId?.startsWith('asset_pay_who:')) return false;
+  const id = interaction.customId.split(':')[1];
+  await interaction.deferUpdate();
+  const error = await decide(interaction, id, 'paid', null, interaction.values.map(Number));
+  await interaction.editReply({
+    content: error || `Marked as paid, split across ${interaction.values.length} ${interaction.values.length === 1 ? 'person' : 'people'}. The dev has been told.`, components: [],
+  }).catch(() => {});
   return true;
 }
 
@@ -247,4 +292,4 @@ async function handleModal(interaction) {
   return true;
 }
 
-module.exports = { configure, setScope, isPaymentsPost, handleMessage, applyUpdate, handleButton, handleModal };
+module.exports = { configure, setScope, isPaymentsPost, handleMessage, applyUpdate, handleButton, handleModal, handleSelect };

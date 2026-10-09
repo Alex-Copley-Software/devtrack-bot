@@ -130,6 +130,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
  try {
   if (interaction.isStringSelectMenu()) {
     if (await handleReopenStatusSelect(interaction)) return;
+    if (await assetPayouts.handleSelect(interaction)) return;
     return;
   }
 

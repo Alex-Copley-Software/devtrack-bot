@@ -8,7 +8,7 @@
 // Does nothing unless ASSET_AGENT_ENABLED=true.
 
 const axios = require('axios');
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } = require('discord.js');
 
 const API_URL = process.env.API_URL || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
@@ -26,6 +26,8 @@ const api = (method, path, data, timeout = 15000) => axios({ method, url: `${API
 let allowed = new Set();
 let selfTestSeen; // undefined until the first config load, so an old request is not replayed on restart
 let discordClient = null;
+// The assistant: who it answers, and the channels where it answers without being mentioned.
+let assistant = { enabled: false, admins: new Set(), channels: new Set() };
 let buffer = [];
 let ticking = false;
 
@@ -35,6 +37,11 @@ async function refreshConfig() {
   try {
     const config = await api('get', '/agent/config');
     allowed = new Set(config.enabled ? config.channelIds : []);
+    assistant = {
+      enabled: !!(config.enabled && config.assistant?.enabled),
+      admins: new Set((config.assistant?.admins || []).map(a => a.id)),
+      channels: new Set((config.assistant?.channels || []).map(c => c.id)),
+    };
     const token = config.selfTestToken || null;
     if (selfTestSeen !== undefined && token && token !== selfTestSeen && discordClient) {
       selfTest(discordClient).catch(err => console.error('[AssetAgent] Self-test failed:', err.message));
@@ -43,7 +50,7 @@ async function refreshConfig() {
   } catch (err) {
     // Keep the last known allowlist; a 404 just means the backend flag is off.
     if (err.response?.status !== 404) console.error('[AssetAgent] Could not refresh the channel allowlist:', err.message);
-    else allowed = new Set();
+    else { allowed = new Set(); assistant = { enabled: false, admins: new Set(), channels: new Set() }; }
   }
 }
 
@@ -51,26 +58,74 @@ async function refreshConfig() {
 // channel, a thread or forum post under one, or anything under an
 // allowlisted category are kept, and only the fields the agent needs.
 function onMessage(message) {
-  if (!ENABLED || !allowed.size || message.author?.bot || !message.guildId) return;
+  if (!ENABLED || message.author?.bot || !message.guildId) return;
+  if (!allowed.size && !assistant.channels.size) return;
   const channel = message.channel;
   const isThread = !!channel?.isThread?.();
   const parentId = isThread ? channel.parentId : null;
   const categoryId = (isThread ? channel.parent?.parentId : channel?.parentId) || null;
   // The review channel is never read, even when its category is allowlisted.
   if (REVIEW_CHANNEL_ID && (message.channelId === REVIEW_CHANNEL_ID || parentId === REVIEW_CHANNEL_ID)) return;
-  if (![message.channelId, parentId, categoryId].some(id => id && allowed.has(id))) return;
-  buffer.push({
+  const inScope = [message.channelId, parentId, categoryId].some(id => id && allowed.has(id));
+  const inAssistantChannel = [message.channelId, parentId].some(id => id && assistant.channels.has(id));
+  if (!inScope && !inAssistantChannel) return;
+  const payload = {
     id: message.id,
     channelId: message.channelId,
     parentChannelId: parentId,
     categoryId,
+    // The post or channel name often says what the files are ("Starrk face").
+    channelName: isThread && channel.parent?.name ? `${channel.parent.name} / ${channel.name}` : channel?.name || null,
     guildId: message.guildId,
     authorDiscordId: message.author.id,
     authorName: message.member?.displayName || message.author.username,
     content: message.content || '',
     attachments: [...(message.attachments?.values?.() || [])].map(a => ({ name: a.name, url: a.url })),
     postedAt: new Date(message.createdTimestamp).toISOString(),
-  });
+  };
+
+  // An approved person talking to the bot: always in an assistant channel,
+  // elsewhere only when they mention it or reply to it.
+  const me = message.client?.user?.id;
+  const addressed = !!me && message.mentions?.users?.has(me);
+  if (assistant.enabled && assistant.admins.has(message.author.id) && (inAssistantChannel || addressed)) {
+    answer(message, payload).catch(err => console.error('[AssetAssistant] failed:', err.message));
+  }
+  // Assistant channels are a conversation with the bot, not dev chatter for the suggestion pipeline.
+  if (inScope && !inAssistantChannel) buffer.push(payload);
+}
+
+// ── assistant ─────────────────────────────────────────────────────────────────
+
+const stripMention = (text, me) => String(text || '').replace(new RegExp(`<@!?${me}>`, 'g'), '').trim();
+
+async function answer(message, payload) {
+  const me = message.client.user.id;
+  const content = stripMention(payload.content, me);
+  if (!content && !payload.attachments.length) return;
+  await message.channel.sendTyping().catch(() => {});
+  const typing = setInterval(() => message.channel.sendTyping().catch(() => {}), 8000);
+  try {
+    // The last few turns between approved people and the bot, so follow-ups ("and the texture?") make sense.
+    const recent = await message.channel.messages.fetch({ limit: 12, before: message.id }).catch(() => null);
+    const history = recent ? [...recent.values()]
+      .filter(m => m.author.id === me || assistant.admins.has(m.author.id))
+      .filter(m => Date.now() - m.createdTimestamp < 6 * 60 * 60 * 1000)
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+      .map(m => ({ role: m.author.id === me ? 'assistant' : 'user', name: m.member?.displayName || m.author.username, content: stripMention(m.content, me) }))
+      .filter(h => h.content) : [];
+    const result = await api('post', '/assistant', { message: { ...payload, content }, history }, 150000);
+    if (result.reply) {
+      await message.reply({ content: result.reply, allowedMentions: { parse: [], repliedUser: false }, flags: MessageFlags.SuppressEmbeds });
+    }
+  } catch (err) {
+    const status = err.response?.status;
+    if (status === 403 || status === 404) return; // access was removed, or the agent is switched off
+    console.error('[AssetAssistant] Could not answer:', err.response?.data?.error || err.message);
+    await message.reply({ content: 'I could not answer that just now. Try again in a minute.', allowedMentions: { parse: [], repliedUser: false } }).catch(() => {});
+  } finally {
+    clearInterval(typing);
+  }
 }
 
 async function flush() {
@@ -315,6 +370,7 @@ function start(client) {
   discordClient = client;
   refreshConfig().then(() => {
     console.log(`[AssetAgent] Reading ${allowed.size} allowlisted channel(s)`);
+    console.log(`[AssetAssistant] ${assistant.enabled ? `Answering ${assistant.admins.size} approved account(s), ${assistant.channels.size} assistant channel(s)` : 'Off'}`);
     // ASSET_AGENT_SELFTEST=true runs the self-test once on startup.
     if (String(process.env.ASSET_AGENT_SELFTEST || '').toLowerCase() === 'true') {
       selfTest(client).catch(err => console.error('[AssetAgent] Self-test failed:', err.message));

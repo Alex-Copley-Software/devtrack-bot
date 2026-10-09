@@ -150,6 +150,15 @@ async function answer(message, payload) {
     if (result.reply) {
       await message.reply({ content: result.reply, allowedMentions: { parse: [], repliedUser: false }, flags: MessageFlags.SuppressEmbeds });
     }
+    // Task changes they asked for: a card each, changed only when someone presses Accept.
+    for (const suggestion of result.proposals || []) {
+      try {
+        const sent = await message.channel.send({ embeds: [suggestionEmbed(suggestion)], components: [suggestionButtons(suggestion)], allowedMentions: { parse: [] } });
+        await api('post', `/suggestions/${suggestion.id}/posted`, { channelId: message.channelId, messageId: sent.id }).catch(() => {});
+      } catch (err) {
+        console.error(`[AssetAssistant] Could not post the confirmation for ${suggestion.id}:`, err.message);
+      }
+    }
   } catch (err) {
     const status = err.response?.status;
     if (status === 403 || status === 404) return; // access was removed, or the agent is switched off

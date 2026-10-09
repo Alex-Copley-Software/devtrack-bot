@@ -30,7 +30,7 @@ assetPayouts.setScope(id => allowed.has(id));
 let selfTestSeen; // undefined until the first config load, so an old request is not replayed on restart
 let discordClient = null;
 // The assistant: who it answers, and the channels where it answers without being mentioned.
-let assistant = { enabled: false, admins: new Set(), channels: new Set() };
+let assistant = { enabled: false, prefix: '--', admins: new Set(), channels: new Set() };
 let buffer = [];
 let ticking = false;
 
@@ -42,6 +42,7 @@ async function refreshConfig() {
     allowed = new Set(config.enabled ? config.channelIds : []);
     assistant = {
       enabled: !!(config.enabled && config.assistant?.enabled),
+      prefix: config.assistant?.prefix ?? '--',
       admins: new Set((config.assistant?.admins || []).map(a => a.id)),
       channels: new Set((config.assistant?.channels || []).map(c => c.id)),
     };
@@ -55,7 +56,7 @@ async function refreshConfig() {
   } catch (err) {
     // Keep the last known allowlist; a 404 just means the backend flag is off.
     if (err.response?.status !== 404) console.error('[AssetAgent] Could not refresh the channel allowlist:', err.message);
-    else { allowed = new Set(); assistant = { enabled: false, admins: new Set(), channels: new Set() }; }
+    else { allowed = new Set(); assistant = { enabled: false, prefix: '--', admins: new Set(), channels: new Set() }; }
   }
 }
 
@@ -89,19 +90,26 @@ function onMessage(message) {
     postedAt: new Date(message.createdTimestamp).toISOString(),
   };
 
-  // A dev's Payments post is for payout requests only: it is not chatter for
-  // the suggestion pipeline, and the assistant does not answer there.
-  if (inScope && assetPayouts.isPaymentsPost(channel)) {
-    assetPayouts.handleMessage(message, payload).catch(err => console.error('[AssetPayouts] failed:', err.message));
+  // An approved person talking to the bot. In an assistant channel every
+  // message counts. Anywhere else the agent reads (a dev's forum, a team
+  // channel) the message has to be addressed to it: start with the prefix
+  // ("-- where is Aizen at"), mention it, or reply to it. That keeps it out
+  // of ordinary conversations between managers and devs.
+  const me = message.client?.user?.id;
+  const text = String(payload.content || '').trimStart();
+  const prefixed = !!assistant.prefix && text.startsWith(assistant.prefix) && text.slice(assistant.prefix.length).trim().length > 0;
+  const addressed = prefixed || (!!me && message.mentions?.users?.has(me));
+  if (assistant.enabled && assistant.admins.has(message.author.id) && (inAssistantChannel || addressed)) {
+    const spoken = prefixed ? { ...payload, content: text.slice(assistant.prefix.length).trim() } : payload;
+    answer(message, spoken).catch(err => console.error('[AssetAssistant] failed:', err.message));
+    // Something said to the bot is not dev chatter: the suggestion pipeline does not read it too.
     return;
   }
 
-  // An approved person talking to the bot: always in an assistant channel,
-  // elsewhere only when they mention it or reply to it.
-  const me = message.client?.user?.id;
-  const addressed = !!me && message.mentions?.users?.has(me);
-  if (assistant.enabled && assistant.admins.has(message.author.id) && (inAssistantChannel || addressed)) {
-    answer(message, payload).catch(err => console.error('[AssetAssistant] failed:', err.message));
+  // A dev's Payments post is for payout requests only, not for the suggestion pipeline.
+  if (inScope && assetPayouts.isPaymentsPost(channel)) {
+    assetPayouts.handleMessage(message, payload).catch(err => console.error('[AssetPayouts] failed:', err.message));
+    return;
   }
   // Assistant channels are a conversation with the bot, not dev chatter for the suggestion pipeline.
   if (inScope && !inAssistantChannel) buffer.push(payload);
@@ -128,7 +136,10 @@ async function checkAssistantChannels() {
   }
 }
 
-const stripMention = (text, me) => String(text || '').replace(new RegExp(`<@!?${me}>`, 'g'), '').trim();
+const stripMention = (text, me) => {
+  const clean = String(text || '').replace(new RegExp(`<@!?${me}>`, 'g'), '').trim();
+  return assistant.prefix && clean.startsWith(assistant.prefix) ? clean.slice(assistant.prefix.length).trim() : clean;
+};
 
 async function answer(message, payload) {
   const me = message.client.user.id;
@@ -413,7 +424,7 @@ function start(client) {
   discordClient = client;
   refreshConfig().then(() => {
     console.log(`[AssetAgent] Reading ${allowed.size} allowlisted channel(s)`);
-    console.log(`[AssetAssistant] ${assistant.enabled ? `Answering ${assistant.admins.size} approved account(s), ${assistant.channels.size} assistant channel(s)` : 'Off'}`);
+    console.log(`[AssetAssistant] ${assistant.enabled ? `Answering ${assistant.admins.size} approved account(s), ${assistant.channels.size} assistant channel(s), prefix "${assistant.prefix}" elsewhere` : 'Off'}`);
     // ASSET_AGENT_SELFTEST=true runs the self-test once on startup.
     if (String(process.env.ASSET_AGENT_SELFTEST || '').toLowerCase() === 'true') {
       selfTest(client).catch(err => console.error('[AssetAgent] Self-test failed:', err.message));

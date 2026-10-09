@@ -44,12 +44,21 @@ async function adminChannel(client, guildId, preferredId) {
   // Not set yet: use the channel called "payouts".
   const guild = await client.guilds.fetch(guildId).catch(() => null);
   const channels = guild ? await guild.channels.fetch().catch(() => null) : null;
-  const found = channels?.find(c => c && c.type === ChannelType.GuildText && /^\W*payouts?\W*$/i.test(c.name));
+  // Any channel the bot can post in whose name is "payouts", allowing for
+  // decoration around it ("💰︱payouts", "admin-payouts").
+  const named = [...(channels?.values() || [])].filter(c => c && /payouts?/i.test(c.name || '') && !/^\W*payments?\W*$/i.test(c.name));
+  const usable = named.filter(c => typeof c.send === 'function' && c.permissionsFor(client.user)?.has(['ViewChannel', 'SendMessages', 'EmbedLinks']));
+  const found = usable.find(c => /^\W*payouts?\W*$/i.test(c.name)) || usable[0] || null;
   if (!found && !warned) {
     warned = true;
-    console.error('[AssetPayouts] No admin payouts channel: set one under Assets, Agent settings, or create a text channel named "payouts" the bot can post in.');
+    const seen = named.map(c => {
+      const perms = c.permissionsFor(client.user);
+      const missing = ['ViewChannel', 'SendMessages', 'EmbedLinks'].filter(x => !perms?.has(x));
+      return `"${c.name}" (${ChannelType[c.type]}${typeof c.send === 'function' ? '' : ', not a channel messages can be sent to'}${missing.length ? `, bot is missing ${missing.join(' + ')}` : ''})`;
+    });
+    console.error(`[AssetPayouts] No admin payouts channel the bot can post in. ${seen.length ? `Found: ${seen.join('; ')}` : 'No channel with "payout" in its name is visible to the bot.'}`);
   }
-  return found || null;
+  return found;
 }
 
 const STATE = {
@@ -114,17 +123,7 @@ async function handleMessage(message, payload) {
   if (result.action !== 'logged') return;
 
   const p = result.payout;
-  const channel = await adminChannel(message.client, message.guildId, result.adminChannelId);
-  let forwarded = false;
-  if (channel) {
-    try {
-      const sent = await channel.send({ embeds: [adminEmbed(p)], components: [buttons(p.id)], allowedMentions: { parse: [] } });
-      await api('post', `/payouts/${p.id}/posted`, { adminChannelId: channel.id, adminMessageId: sent.id });
-      forwarded = true;
-    } catch (err) {
-      console.error(`[AssetPayouts] Could not post in the admin channel ${channel.id}:`, err.message);
-    }
-  }
+  const forwarded = await forward(message.client, { ...p, guildId: message.guildId });
   console.log(`[AssetPayouts] ${p.devName}: ${p.amountText || 'no amount'} for ${p.description}${forwarded ? '' : ' (NOT forwarded, see above)'}`);
   await message.reply({
     content: forwarded ? result.reply : `${result.reply.split('. I have passed')[0]}. It is logged, but I could not reach the admins' channel, so let a manager know.`,
@@ -134,7 +133,24 @@ async function handleMessage(message, payload) {
 
 // ── applying a decision to Discord ────────────────────────────────────────────
 
+async function forward(client, p) {
+  const channel = await adminChannel(client, p.guildId, null);
+  if (!channel) return false;
+  try {
+    const sent = await channel.send({ embeds: [adminEmbed(p)], components: [buttons(p.id)], allowedMentions: { parse: [] } });
+    await api('post', `/payouts/${p.id}/posted`, { adminChannelId: channel.id, adminMessageId: sent.id });
+    warned = false;
+    console.log(`[AssetPayouts] Forwarded ${p.devName}'s request to #${channel.name}`);
+    return true;
+  } catch (err) {
+    console.error(`[AssetPayouts] Could not post in the admin channel ${channel.id}:`, err.message);
+    return false;
+  }
+}
+
 async function applyUpdate(client, p) {
+  // Logged earlier but never forwarded (the admin channel was not reachable then).
+  if (p.status === 'pending' && !p.adminMessageId) { await forward(client, p); return; }
   // The admins' card.
   if (p.adminChannelId && p.adminMessageId) {
     const channel = await client.channels.fetch(p.adminChannelId).catch(() => null);

@@ -5,12 +5,14 @@
 // report, keeps the conversation logged, and closes the ticket once the
 // report is finished:
 //
-//   $close -> $transcript -> $delete     (Ticket Tool saves the transcript)
+//   $delete     (Ticket Tool deletes the ticket and saves its transcript)
 //
-// Ticket Tool may not act on commands sent by another bot. Each step is
-// checked, and if the ticket is still there at the end DevTrack saves its own
-// transcript to the same transcripts channel and deletes the channel itself.
-// A ticket is never deleted without a transcript.
+// Ticket Tool may not act on commands sent by another bot. If the ticket is
+// still there afterwards, DevTrack saves its own transcript to the same
+// transcripts channel and deletes the channel itself. The conversation is
+// read before $delete is sent, so if Ticket Tool deletes the ticket without
+// posting a transcript, DevTrack posts one from what it read. A ticket never
+// goes without a transcript.
 
 const axios = require('axios');
 const { AttachmentBuilder, ChannelType, EmbedBuilder, OverwriteType } = require('discord.js');
@@ -30,6 +32,8 @@ const AUTO_CLOSE = process.env.TICKET_AUTO_CLOSE !== 'false';
 const USE_TOOL_COMMANDS = process.env.TICKET_TOOL_COMMANDS !== 'false';
 const FALLBACK_CLOSE = process.env.TICKET_FALLBACK_CLOSE !== 'false';
 const PREFIX = process.env.TICKET_TOOL_PREFIX || '$';
+// Ticket Tool commands sent to finish a ticket, in order. The last one is expected to remove the channel.
+const TOOL_SEQUENCE = String(process.env.TICKET_TOOL_SEQUENCE || 'delete').split(',').map(s => s.trim().replace(/^\$/, '')).filter(Boolean);
 const STEP_MS = Number(process.env.TICKET_STEP_MS) || 2500;               // how often a close step is checked
 const idList = v => String(v || '').split(',').map(s => s.trim()).filter(Boolean);
 const EXTRA_CATEGORY_IDS = { test: idList(process.env.TICKET_TEST_CATEGORY_ID), live: idList(process.env.TICKET_LIVE_CATEGORY_ID) };
@@ -353,10 +357,9 @@ async function onBotMessage(message) {
 }
 
 // DevTrack's own transcript, for when Ticket Tool did not make one.
-async function saveOwnTranscript(channel, ticket) {
-  const target = transcriptsChannel(channel.guild, ticket.kind);
+async function saveOwnTranscript(guild, channelId, ticket, messages) {
+  const target = transcriptsChannel(guild, ticket.kind);
   if (!target) throw new Error(`No ${ticket.kind}-game-transcripts channel found`);
-  const messages = await fetchMessages(channel);
   const lines = messages.map(m => {
     const extras = [
       ...[...m.attachments.values()].map(a => `[file] ${a.url}`),
@@ -385,7 +388,7 @@ async function saveOwnTranscript(channel, ticket) {
     .setFooter({ text: 'Saved by DevTrack' })
     .setTimestamp(new Date());
   const sent = await target.send({ embeds: [embed], files: [file], allowedMentions: { parse: [] } });
-  await api('post', '/tickets/transcript', { channelId: channel.id, kind: ticket.kind, number: ticket.number, url: sent.url, fileUrl: sent.attachments.first()?.url || null });
+  await api('post', '/tickets/transcript', { channelId, kind: ticket.kind, number: ticket.number, url: sent.url, fileUrl: sent.attachments.first()?.url || null });
   return sent.url;
 }
 
@@ -437,27 +440,37 @@ async function closeTicket(ticket) {
   const state = { kind: ticket.kind, number: ticket.number, at: Date.now(), transcript: ticket.transcriptUrl || null };
   closing.set(channelId, state);
   try {
-    await channel.send(`🔒 **This ticket is now closing.** The report is ${ticket.status} and a transcript is being saved.`).catch(() => {});
+    await channel.send(`🔒 **This ticket is now being deleted.** The report is ${ticket.status} and a transcript is being saved.`).catch(() => {});
 
-    if (USE_TOOL_COMMANDS) {
-      const answered = await toolCommand(channel, 'close', 6);
-      if (answered) {
-        if (await stillExists(channelId)) await toolCommand(channel, 'transcript', 6);
-        if (await stillExists(channelId)) await toolCommand(channel, 'delete', 2);
-        if (await waitFor(async () => !(await stillExists(channelId)), 18)) {
-          await api('post', `/tickets/${channelId}/closed`, { method: 'ticket_tool' });
-          known.delete(channelId);
-          console.log(`[Tickets] ${ticket.name} closed by Ticket Tool`);
-          return;
-        }
+    // Read now: once the channel is deleted there is nothing left to read.
+    const guild = channel.guild;
+    const snapshot = await fetchMessages(channel);
+
+    if (USE_TOOL_COMMANDS && TOOL_SEQUENCE.length) {
+      for (const [i, command] of TOOL_SEQUENCE.entries()) {
+        if (!(await stillExists(channelId))) break;
+        const answered = await toolCommand(channel, command, 6);
+        if (!answered && i < TOOL_SEQUENCE.length - 1) break;   // ignored: no point sending the rest
       }
-      console.warn(`[Tickets] Ticket Tool ${answered ? 'did not delete' : 'did not answer in'} ${ticket.name}`);
+      if (await waitFor(async () => !(await stillExists(channelId)), 18)) {
+        // Ticket Tool posts its transcript as it deletes. If none turns up, ours goes in its place.
+        await waitFor(async () => !!state.transcript, 8);
+        if (!state.transcript) {
+          state.transcript = await saveOwnTranscript(guild, channelId, ticket, snapshot)
+            .catch(err => { console.error(`[Tickets] ${ticket.name} was deleted with no transcript, and saving one failed:`, err.message); return null; });
+        }
+        await api('post', `/tickets/${channelId}/closed`, { method: 'ticket_tool' });
+        known.delete(channelId);
+        console.log(`[Tickets] ${ticket.name} deleted by Ticket Tool (transcript ${state.transcript})`);
+        return;
+      }
+      console.warn(`[Tickets] Ticket Tool did not delete ${ticket.name}`);
     }
 
-    if (!FALLBACK_CLOSE) throw new Error('Ticket Tool did not act on the close commands');
+    if (!FALLBACK_CLOSE) throw new Error('Ticket Tool did not act on the delete command');
     channel = await stillExists(channelId);
     if (channel) {
-      if (!state.transcript) state.transcript = await saveOwnTranscript(channel, ticket);
+      if (!state.transcript) state.transcript = await saveOwnTranscript(guild, channelId, ticket, await fetchMessages(channel));
       await channel.delete(`DevTrack: report ${ticket.status}, transcript saved`);
     }
     await api('post', `/tickets/${channelId}/closed`, { method: 'devtrack' });
@@ -493,7 +506,7 @@ function start(c, map) {
   if (!ENABLED) return;
   client = c;
   threadReportMap = map;
-  console.log(`[Tickets] Watching Ticket Tool tickets (close on ${CLOSE_ON} after ${Math.round(CLOSE_DELAY_MS / 1000)}s, auto close ${AUTO_CLOSE ? 'on' : 'off'})`);
+  console.log(`[Tickets] Watching Ticket Tool tickets (close on ${CLOSE_ON} after ${Math.round(CLOSE_DELAY_MS / 1000)}s, auto close ${AUTO_CLOSE ? 'on' : 'off'}, commands: ${USE_TOOL_COMMANDS ? TOOL_SEQUENCE.map(c => PREFIX + c).join(' ') : 'none'})`);
   sweep().catch(err => console.error('[Tickets] Startup sweep failed:', err.message));
   setInterval(() => sweep().catch(err => console.error('[Tickets] Sweep failed:', err.message)), 10 * 60000);
   setInterval(closeFinished, 60000);

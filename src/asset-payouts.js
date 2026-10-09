@@ -107,6 +107,17 @@ function adminEmbed(p) {
     });
     if (p.status === 'pending') embed.setColor(0xf87171);
   }
+  // From the Revenue page's expense log: what this dev was paid lately.
+  const history = Array.isArray(p.paymentHistory) ? p.paymentHistory : [];
+  if (history.length && p.status === 'pending') {
+    embed.addFields({
+      name: 'Recent payments to them (Revenue)',
+      value: history.slice(0, 5).map(h => `${h.date || 'no date'} · ${Number(h.amount || 0).toLocaleString('en-US')} · ${String(h.description || '').slice(0, 70)}`).join('\n').slice(0, 1000),
+    });
+  }
+  if (p.status === 'paid') {
+    embed.addFields({ name: 'Revenue', value: p.revenueExpenseId ? `Logged as expense #${p.revenueExpenseId}` : p.revenueNote || 'Not logged' });
+  }
   if (p.status === 'declined' && p.declineReason) embed.addFields({ name: 'Why', value: String(p.declineReason).slice(0, 500) });
   return embed;
 }

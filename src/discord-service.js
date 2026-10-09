@@ -178,6 +178,9 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
     const thread = await client.channels.fetch(threadId);
     if (!thread) { console.error(`[Discord] Thread ${threadId} not found`); return; }
 
+    // Ticket Tool tickets are plain text channels: no forum tags, and they close once the report is finished.
+    const isTicket = !thread.isThread?.();
+
     // Get tag map for this specific channel
     const tagMap = getTagMap(thread);
 
@@ -194,8 +197,10 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
     // Discord allows max 5 tags per thread
     const finalTags = [...new Set(newTags)].slice(0, 5);
 
-    await thread.setAppliedTags(finalTags);
-    console.log(`[Discord] Tags updated on thread ${threadId}: ${finalTags.join(', ')}`);
+    if (!isTicket) {
+      await thread.setAppliedTags(finalTags);
+      console.log(`[Discord] Tags updated on thread ${threadId}: ${finalTags.join(', ')}`);
+    }
 
     // Build and send message
     const isSuggestion = reportType === 'suggestion';
@@ -211,7 +216,15 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
 
     console.log(`[Discord] notifyOwner: ${notifyOwner}, userId: ${discordUserId}`);
     const pingId = notifyOwner ? discordUserId : null;
-    const message = buildMessage(messageAction, { mention: pingId, bugLevel, devNotes, assigneeName });
+    let message = buildMessage(messageAction, { mention: pingId, bugLevel, devNotes, assigneeName });
+    if (isTicket && message) {
+      message = message
+        .replace('We\'ll keep this thread updated', 'We\'ll keep this ticket updated')
+        .replace(' Please reopen if you experience this again.', ' If it happens again, open a new ticket.');
+      if (action === 'resolved' || action === 'declined') {
+        message += '\n> This ticket will close shortly. A transcript is saved for our records.';
+      }
+    }
     console.log(`[Discord] message: ${message.slice(0, 80)}`);
 
     if (message) {
@@ -423,8 +436,8 @@ async function sendPausedThreadPing({ threadId, discordUserId }) {
     await thread.send(
       [
         `${mention}🟢 **Bug reports are back open.**`,
-        `> This thread was created while reports were paused, so it wasn't logged as a DevTrack ticket.`,
-        `> If this is still happening, please open a **new** bug report thread — and check the change logs first to make sure it's still a bug and not intended behavior.`,
+        `> This was created while reports were paused, so it wasn't logged in DevTrack.`,
+        `> If this is still happening, please open a **new** bug report — and check the change logs first to make sure it's still a bug and not intended behavior.`,
       ].join('\n')
     );
     return true;

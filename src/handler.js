@@ -24,21 +24,25 @@ function buildAttachmentList(message) {
   }));
 }
 
-function buildForm({ thread, starterMessage, reportType }) {
-  const content     = starterMessage?.content || '';
+// `overrides` is for reports that are not a forum post (Ticket Tool tickets):
+// the title, text and files are worked out by the caller rather than taken
+// from the thread name and its starter message.
+function buildForm({ thread, starterMessage, reportType, overrides = {} }) {
+  const content     = overrides.description ?? starterMessage?.content ?? '';
   const discordUser = starterMessage?.author?.tag || 'unknown';
-  const channelName = thread.parent?.name || 'unknown';
-  const attachments = buildAttachmentList(starterMessage);
+  const channelLabel = overrides.channelLabel || `#${thread.parent?.name || 'unknown'}`;
+  const attachments = overrides.attachments || buildAttachmentList(starterMessage);
 
   const form = new FormData();
   form.append('type',            reportType);
-  form.append('title',           thread.name);
+  form.append('title',           overrides.title || thread.name);
   form.append('description',     content || '(No description provided)');
+  if (overrides.tags?.length) form.append('tags', overrides.tags.join(','));
   form.append('priority',        'medium');
   form.append('discordUser',     discordUser);
   form.append('discordUserId',   starterMessage?.author?.id || '');
   form.append('discordThreadId', thread.id);
-  form.append('discordChannel',  `#${channelName}`);
+  form.append('discordChannel',  channelLabel);
   form.append('discordMessageId', starterMessage?.id || thread.id);
   if (attachments.length > 0) {
     form.append('attachmentUrls', JSON.stringify(attachments));
@@ -54,7 +58,7 @@ async function submitReport(form) {
   return response.data.reportId;
 }
 
-async function onSuccess({ reportId, thread, starterMessage, reportType }) {
+async function onSuccess({ reportId, thread, starterMessage, reportType, overrides = {} }) {
   const discordUser   = starterMessage?.author?.tag || 'unknown';
   const discordUserId = starterMessage?.author?.id  || '';
 
@@ -71,7 +75,8 @@ async function onSuccess({ reportId, thread, starterMessage, reportType }) {
   });
 
   const confirmMsg = await thread.send(
-    reportType === 'suggestion'
+    overrides.receipt ? overrides.receipt
+    : reportType === 'suggestion'
       ? `> 💡 **Suggestion received.** Thank you for the feedback — the engineers will review this shortly.\n> React with ✅ below to get pinged when there's an update.`
       : `> 🐛 **Bug report received.** Thank you for reporting — the engineers will get to this shortly.\n> React with ✅ below to get pinged when there's an update.`
   ).catch(err => {
@@ -104,7 +109,7 @@ async function onSuccess({ reportId, thread, starterMessage, reportType }) {
 
 const RETRY_DELAYS = [5000, 15000, 30000];
 
-async function attemptWithRetry({ thread, starterMessage, reportType }) {
+async function attemptWithRetry({ thread, starterMessage, reportType, overrides }) {
   let lastErr = null;
 
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
@@ -115,9 +120,9 @@ async function attemptWithRetry({ thread, starterMessage, reportType }) {
     }
 
     try {
-      const form     = buildForm({ thread, starterMessage, reportType });
+      const form     = buildForm({ thread, starterMessage, reportType, overrides });
       const reportId = await submitReport(form);
-      return await onSuccess({ reportId, thread, starterMessage, reportType });
+      return await onSuccess({ reportId, thread, starterMessage, reportType, overrides });
     } catch (err) {
       if (err.response?.status === 409) {
         console.log(`[Handler] Skipped duplicate: "${thread.name}"`);
@@ -147,6 +152,7 @@ async function attemptWithRetry({ thread, starterMessage, reportType }) {
     thread,
     starterMessage,
     reportType,
+    overrides,
     failMsg,
     lastAttempt: Date.now(),
   });
@@ -156,13 +162,13 @@ async function attemptWithRetry({ thread, starterMessage, reportType }) {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-async function handleNewPost({ thread, starterMessage, reportType, client }) {
+async function handleNewPost({ thread, starterMessage, reportType, client, overrides }) {
   console.log(`[Handler] Processing: "${thread.name}"`);
   console.log(`  Type:        ${reportType}`);
   console.log(`  Attachments: ${buildAttachmentList(starterMessage).length}`);
   console.log(`  Author:      ${starterMessage?.author?.tag || 'unknown'}`);
 
-  return attemptWithRetry({ thread, starterMessage, reportType });
+  return attemptWithRetry({ thread, starterMessage, reportType, overrides });
 }
 
 // ── Button interaction handler ────────────────────────────────────────────────
@@ -208,7 +214,7 @@ async function handleRetryButton(interaction) {
       }).catch(() => {});
     }
 
-    await onSuccess({ reportId, thread: pending.thread, starterMessage: pending.starterMessage, reportType: pending.reportType });
+    await onSuccess({ reportId, thread: pending.thread, starterMessage: pending.starterMessage, reportType: pending.reportType, overrides: pending.overrides });
     await interaction.editReply({ content: `✅ Report logged successfully!` });
 
   } catch (err) {

@@ -6,6 +6,7 @@
 // the report owner to confirm, and escalates to Senior Testers after 12h.
 
 const axios = require('axios');
+const tickets = require('./tickets');
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { SENIOR_TESTER_ROLE_ID, sendCreditAuditNotice } = require('./discord-service');
 
@@ -52,11 +53,11 @@ function buildConfirmRow(requestId) {
 
 async function handleCredit(interaction, WATCHED_CHANNELS) {
   const thread = interaction.channel;
-  if (!thread?.isThread()) {
-    return interaction.reply({ content: '❌ This command can only be used inside a bug report thread.', ephemeral: true });
+  const reportType = tickets.reportTypeFor(thread, WATCHED_CHANNELS);
+  if (!reportType) {
+    return interaction.reply({ content: '❌ This command can only be used inside a bug report thread or ticket.', ephemeral: true });
   }
 
-  const reportType = WATCHED_CHANNELS[thread.parentId];
   if (reportType !== 'bug') {
     return interaction.reply({ content: '❌ This command can only be used in bug report threads.', ephemeral: true });
   }
@@ -115,11 +116,11 @@ async function handleCredit(interaction, WATCHED_CHANNELS) {
 
 async function handleRequestCredit(interaction, WATCHED_CHANNELS) {
   const thread = interaction.channel;
-  if (!thread?.isThread()) {
-    return interaction.reply({ content: '❌ This command can only be used inside a bug report thread.', ephemeral: true });
+  const reportType = tickets.reportTypeFor(thread, WATCHED_CHANNELS);
+  if (!reportType) {
+    return interaction.reply({ content: '❌ This command can only be used inside a bug report thread or ticket.', ephemeral: true });
   }
 
-  const reportType = WATCHED_CHANNELS[thread.parentId];
   if (reportType !== 'bug') {
     return interaction.reply({ content: '❌ This command can only be used in bug report threads.', ephemeral: true });
   }

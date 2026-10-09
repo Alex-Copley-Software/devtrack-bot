@@ -54,6 +54,7 @@ const API_URL = process.env.API_URL || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
 
 const threadReportMap = new Map();
+const tickets = require('./tickets');
 
 // Register slash commands
 async function registerCommands() {
@@ -116,6 +117,7 @@ client.once(Events.ClientReady, async (c) => {
   webhookServer.start();
   await registerCommands();
   await reportPause.syncPauseState();
+  tickets.start(client, threadReportMap); // Ticket Tool tickets as bug reports; off with TICKETS_ENABLED=false
   assetAgent.start(client); // no-op unless ASSET_AGENT_ENABLED=true
   assetStatus.start(client, assetAgent.allowedIds); // no-op unless ASSET_STATUS_POSTS=true
 
@@ -511,7 +513,11 @@ client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
 
 // New message in tracked thread
 client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot) return;
+  if (message.author.bot) {
+    // Ticket Tool posting a transcript is the one bot message that matters.
+    tickets.onBotMessage(message).catch(err => console.error('[Tickets] onBotMessage failed:', err.message));
+    return;
+  }
   // Asset agent ingest: only allowlisted channels, and it never throws.
   try { assetAgent.onMessage(message); } catch (err) { console.error('[AssetAgent] onMessage failed:', err.message); }
   if (process.env.IMPORTS_CHANNEL_ID && message.channelId === process.env.IMPORTS_CHANNEL_ID) {
@@ -529,6 +535,9 @@ client.on(Events.MessageCreate, async (message) => {
     }
     return;
   }
+
+  // Ticket Tool tickets are text channels, not threads; they log themselves.
+  try { if (await tickets.onMessage(message)) return; } catch (err) { console.error('[Tickets] onMessage failed:', err.message); }
 
   if (!message.channel?.isThread()) return;
 
@@ -557,6 +566,14 @@ client.on(Events.MessageCreate, async (message) => {
   });
 });
 
+
+client.on(Events.ChannelCreate, (channel) => {
+  try { tickets.onChannelCreate(channel); } catch (err) { console.error('[Tickets] onChannelCreate failed:', err.message); }
+});
+
+client.on(Events.ChannelDelete, (channel) => {
+  tickets.onChannelDelete(channel).catch(err => console.error('[Tickets] onChannelDelete failed:', err.message));
+});
 
 // Sync ⭐ reaction counts on suggestion posts
 async function syncStarCount(reaction, isSuggestion) {

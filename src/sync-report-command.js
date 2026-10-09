@@ -6,6 +6,7 @@
 // duplicating.
 
 const axios = require('axios');
+const tickets = require('./tickets');
 const FormData = require('form-data');
 const { logMessage, getAttachments } = require('./message-logger');
 
@@ -67,21 +68,14 @@ async function fetchAllMessages(thread) {
 async function handleSyncReport(interaction, WATCHED_CHANNELS, threadReportMap) {
   const thread = interaction.channel;
 
-  if (!thread?.isThread()) {
-    return interaction.reply({
-      content: '❌ This command can only be used inside a forum thread.',
-      ephemeral: true,
-    });
-  }
-
-  const parentId = thread.parentId;
-  const reportType = WATCHED_CHANNELS[parentId];
+  const reportType = tickets.reportTypeFor(thread, WATCHED_CHANNELS);
   if (!reportType) {
     return interaction.reply({
-      content: '❌ This thread is not in a tracked DevTrack channel.',
+      content: '❌ This command can only be used inside a tracked forum thread or a bug ticket.',
       ephemeral: true,
     });
   }
+  const isTicket = !thread.isThread();
 
   await interaction.deferReply({ ephemeral: true });
 
@@ -92,7 +86,7 @@ async function handleSyncReport(interaction, WATCHED_CHANNELS, threadReportMap) 
     if (cachedId) report = { id: cachedId };
   }
   if (!report) {
-    const starter = await thread.fetchStarterMessage({ cache: false }).catch(() => null);
+    const starter = isTicket ? null : await thread.fetchStarterMessage({ cache: false }).catch(() => null);
     if (starter) report = await lookupByMessage(starter.id);
   }
   if (report) {
@@ -103,6 +97,16 @@ async function handleSyncReport(interaction, WATCHED_CHANNELS, threadReportMap) 
   }
 
   // ── 2. Not tracked — create it from the starter post ───────────────────────
+  // A ticket has no starter post: the report is built from what its opener wrote.
+  if (isTicket) {
+    const ticketReportId = await tickets.intake(thread);
+    return interaction.editReply({
+      content: ticketReportId
+        ? `✅ **This ticket is now tracked in DevTrack.**\n${dashboardLink(ticketReportId)}`
+        : '❌ Nothing to log yet: the person who opened this ticket has not written anything in it.',
+    });
+  }
+
   console.log(`[SyncReport] No report found for thread ${thread.id} — creating one`);
 
   let starterMessage = null;

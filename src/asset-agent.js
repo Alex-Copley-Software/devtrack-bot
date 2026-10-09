@@ -42,6 +42,7 @@ async function refreshConfig() {
       admins: new Set((config.assistant?.admins || []).map(a => a.id)),
       channels: new Set((config.assistant?.channels || []).map(c => c.id)),
     };
+    checkAssistantChannels().catch(() => {});
     const token = config.selfTestToken || null;
     if (selfTestSeen !== undefined && token && token !== selfTestSeen && discordClient) {
       selfTest(discordClient).catch(err => console.error('[AssetAgent] Self-test failed:', err.message));
@@ -97,12 +98,32 @@ function onMessage(message) {
 
 // ── assistant ─────────────────────────────────────────────────────────────────
 
+// The usual reason the assistant stays silent: the bot is not allowed into the
+// channel (admin forums are often private), so Discord never sends it the
+// message. Say so in the log, once per channel and state.
+const channelState = new Map();
+async function checkAssistantChannels() {
+  if (!discordClient || !assistant.enabled) return;
+  for (const id of assistant.channels) {
+    const channel = await discordClient.channels.fetch(id).catch(() => null);
+    const perms = channel?.permissionsFor?.(discordClient.user);
+    const missing = !channel ? 'cannot see it at all (add the bot or its role to that channel or forum)'
+      : ['ViewChannel', 'ReadMessageHistory', channel.isThread?.() ? 'SendMessagesInThreads' : 'SendMessages'].filter(p => !perms?.has(p)).join(', ');
+    const state = missing || 'ok';
+    if (channelState.get(id) === state) continue;
+    channelState.set(id, state);
+    if (missing) console.error(`[AssetAssistant] Assistant channel ${id}${channel?.name ? ` "${channel.name}"` : ''}: the bot ${channel ? `is missing ${missing}` : missing}`);
+    else console.log(`[AssetAssistant] Assistant channel ${id} "${channel.name}" is reachable. Answering ${assistant.admins.size} approved account(s).`);
+  }
+}
+
 const stripMention = (text, me) => String(text || '').replace(new RegExp(`<@!?${me}>`, 'g'), '').trim();
 
 async function answer(message, payload) {
   const me = message.client.user.id;
   const content = stripMention(payload.content, me);
   if (!content && !payload.attachments.length) return;
+  console.log(`[AssetAssistant] ${payload.authorName} in ${payload.channelName || payload.channelId}: answering`);
   await message.channel.sendTyping().catch(() => {});
   const typing = setInterval(() => message.channel.sendTyping().catch(() => {}), 8000);
   try {

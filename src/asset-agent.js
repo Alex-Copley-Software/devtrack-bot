@@ -26,6 +26,7 @@ const headers = { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET
 const api = (method, path, data, timeout = 15000) => axios({ method, url: `${API_URL}/api/bot/assets${path}`, data, headers, timeout }).then(r => r.data);
 
 let allowed = new Set();
+assetPayouts.setScope(id => allowed.has(id));
 let selfTestSeen; // undefined until the first config load, so an old request is not replayed on restart
 let discordClient = null;
 // The assistant: who it answers, and the channels where it answers without being mentioned.

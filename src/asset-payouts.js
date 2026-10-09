@@ -26,6 +26,9 @@ const api = (method, path, data, timeout = 15000) => axios({
 }).then(r => r.data);
 
 let config = { enabled: false, adminChannelId: '', managerRoleId: '' };
+// Set by the agent: whether a channel id is one the agent reads (a dev's forum, for instance).
+let isReadChannel = () => false;
+const setScope = fn => { isReadChannel = fn; };
 const configure = next => { config = { enabled: !!next?.enabled, adminChannelId: next?.adminChannelId || '', managerRoleId: next?.managerRoleId || '' }; };
 
 // A dev's "Payments" post: a thread with that name. Whether its forum belongs
@@ -46,14 +49,18 @@ async function adminChannel(client, guildId, preferredId) {
   const channels = guild ? await guild.channels.fetch().catch(() => null) : null;
   // Any channel the bot can post in whose name is "payouts", allowing for
   // decoration around it ("💰︱payouts", "admin-payouts").
-  const named = [...(channels?.values() || [])].filter(c => c && /payouts?/i.test(c.name || '') && !/^\W*payments?\W*$/i.test(c.name));
-  const usable = named.filter(c => typeof c.send === 'function' && c.permissionsFor(client.user)?.has(['ViewChannel', 'SendMessages', 'EmbedLinks']));
+  // The admins' "channel" may well be a forum post, like their other admin
+  // posts, so open posts and threads count too. A dev's own Payments post does not.
+  const threads = guild ? await guild.channels.fetchActiveThreads().catch(() => null) : null;
+  const posts = [...(threads?.threads?.values() || [])].filter(t => !isReadChannel(t.parentId));
+  const named = [...(channels?.values() || []), ...posts].filter(c => c && /payouts?/i.test(c.name || '') && !/^\W*payments?\W*$/i.test(c.name));
+  const usable = named.filter(c => typeof c.send === 'function' && c.permissionsFor(client.user)?.has(['ViewChannel', c.isThread?.() ? 'SendMessagesInThreads' : 'SendMessages', 'EmbedLinks']));
   const found = usable.find(c => /^\W*payouts?\W*$/i.test(c.name)) || usable[0] || null;
   if (!found && !warned) {
     warned = true;
     const seen = named.map(c => {
       const perms = c.permissionsFor(client.user);
-      const missing = ['ViewChannel', 'SendMessages', 'EmbedLinks'].filter(x => !perms?.has(x));
+      const missing = ['ViewChannel', c.isThread?.() ? 'SendMessagesInThreads' : 'SendMessages', 'EmbedLinks'].filter(x => !perms?.has(x));
       return `"${c.name}" (${ChannelType[c.type]}${typeof c.send === 'function' ? '' : ', not a channel messages can be sent to'}${missing.length ? `, bot is missing ${missing.join(' + ')}` : ''})`;
     });
     console.error(`[AssetPayouts] No admin payouts channel the bot can post in. ${seen.length ? `Found: ${seen.join('; ')}` : 'No channel with "payout" in its name is visible to the bot.'}`);
@@ -220,4 +227,4 @@ async function handleModal(interaction) {
   return true;
 }
 
-module.exports = { configure, isPaymentsPost, handleMessage, applyUpdate, handleButton, handleModal };
+module.exports = { configure, setScope, isPaymentsPost, handleMessage, applyUpdate, handleButton, handleModal };

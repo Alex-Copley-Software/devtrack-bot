@@ -203,13 +203,15 @@ const TYPE_TITLES = {
   mark_blocked: 'Blocked',
   create_content_item: 'New content item',
   flag_unknown: 'Needs a look',
+  log_expenses: 'Log expenses on the Revenue page',
 };
 
 const show = value => (value === null || value === undefined || value === '' ? 'none' : String(value));
 function diffLines(suggestion) {
   const before = suggestion.before || {};
   const after = suggestion.after || {};
-  const keys = Object.keys(after);
+  // An expense list is long: it goes in the card's body, where there is room for all of it.
+  const keys = Object.keys(after).filter(k => !(suggestion.type === 'log_expenses' && k === 'payments'));
   if (!keys.length) return null;
   return keys.map(k => (k in before ? `**${k}:** ${show(before[k])} → ${show(after[k])}` : `**${k}:** ${show(after[k])}`)).join('\n').slice(0, 1000);
 }
@@ -219,7 +221,8 @@ function suggestionEmbed(suggestion, footerNote) {
   const color = pending ? 0x7c6cf0 : suggestion.status === 'rejected' ? 0xf87171 : 0x34d399;
   const embed = new EmbedBuilder()
     .setTitle(`${TYPE_TITLES[suggestion.type] || suggestion.type}`)
-    .setDescription(String(suggestion.summary || '').slice(0, 2000) || 'No summary')
+    .setDescription([String(suggestion.summary || '').slice(0, 2000) || 'No summary',
+      suggestion.type === 'log_expenses' ? String(suggestion.after?.payments || '').trim().slice(0, 1900) : ''].filter(Boolean).join('\n\n'))
     .setColor(color)
     .setTimestamp(new Date(suggestion.createdAt || Date.now()));
   const diff = diffLines(suggestion);
@@ -233,7 +236,7 @@ function suggestionEmbed(suggestion, footerNote) {
   // A flag proposes no change, so its buttons say what they do: note it, or wave it off.
   const flag = suggestion.type === 'flag_unknown';
   const state = footerNote
-    || (pending ? 'Waiting for a lead or manager'
+    || (pending ? (suggestion.type === 'log_expenses' ? 'Waiting for an approved admin. Nothing is logged until Accept is pressed.' : 'Waiting for a lead or manager')
       : `${flag ? (suggestion.status === 'rejected' ? 'Dismissed' : 'Acknowledged') : suggestion.status === 'rejected' ? 'Rejected' : 'Accepted'}${suggestion.resolvedVia === 'auto' ? ' automatically' : suggestion.resolvedByName ? ` by ${suggestion.resolvedByName}` : ''}`);
   embed.setFooter({ text: state });
   return embed;

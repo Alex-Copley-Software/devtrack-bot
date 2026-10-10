@@ -40,8 +40,8 @@ async function postCheck({ checkId, threadId, discordUserId, title, requireVideo
       content: [
         `<@${discordUserId}> 🧪 **A fix for your report is ready for you to check.**`,
         title ? `> ${String(title).slice(0, 200)}` : '',
-        `> Test it in game${requireVideo ? ', post a short video in this thread showing the result,' : ''} then press a button below.`,
-        `> **Fixed** if the bug is gone. **Not fixed** if it still happens.`,
+        `> Test it in game${requireVideo ? ', post a video or photo here showing the result,' : ''} then press a button below.`,
+        `> **Fixed** if the bug is gone. **Not fixed** if it still happens.${requireVideo ? ' Either answer needs the video or photo first.' : ''}`,
       ].filter(Boolean).join('\n'),
       components: [buttons(checkId)],
       allowedMentions: { users: [discordUserId] },
@@ -79,8 +79,8 @@ async function updateCheck({ threadId, messageId, discordUserId, state, actorNam
 // ── from the tester ───────────────────────────────────────────────────────────
 
 // The newest thing the tester posted in the thread since they were asked
-// that looks like proof: an uploaded video first, then any upload or video
-// link. Returns a link to that message (attachment URLs expire; this does not).
+// that looks like proof: an uploaded video first, then a photo or any other
+// upload, or a video or image link. Returns a link to that message (attachment URLs expire; this does not).
 async function findProof(channel, userId, since) {
   const fetched = await channel.messages.fetch({ limit: 100 }).catch(() => null);
   if (!fetched) return null;
@@ -113,7 +113,16 @@ async function handleButton(interaction) {
   const [, verdict, checkId] = interaction.customId.split(':');
 
   if (verdict === 'notfixed') {
-    // The reason is collected first; the modal's submit does the rest.
+    // Proof is checked before the form opens, so nobody types a reason only to be told to post a photo.
+    // Best effort: the backend decides for real when the form is submitted.
+    const missing = await api('get', `/qa-check/${checkId}`).then(async ({ check, settings }) =>
+      settings?.requireVideo && check.status === 'pending' && check.discordUserId === interaction.user.id
+        && !(await findProof(interaction.channel, interaction.user.id, new Date(check.requestedAt).getTime()))).catch(() => false);
+    if (missing) {
+      await interaction.reply({ content: 'Post a video or photo showing it still happening here first, then press Not fixed.', ephemeral: true });
+      return true;
+    }
+    // The reason is collected next; the modal's submit does the rest.
     await interaction.showModal(new ModalBuilder()
       .setCustomId(`qa_check_modal:${checkId}`)
       .setTitle('Not fixed')

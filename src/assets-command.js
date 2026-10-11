@@ -1,7 +1,7 @@
 // assets-command.js
 // /assets: the asset tracker from Discord.
 //
-//   /assets update [number]      summary of an update (the one in development by default)
+//   /assets update [number] [name]   summary of an update (the one in development by default)
 //   /assets mine                 the caller's open tasks
 //   /assets item name:<name>     an item's checklist and progress
 //   /assets task id:<n> status:<status> [reason:<text>]   update one of your own tasks (Blocked needs a reason)
@@ -42,7 +42,8 @@ function getCommandDefinitions() {
       .setName('assets')
       .setDescription('Asset tracker: update progress, your tasks, and item checklists')
       .addSubcommand(sub => sub.setName('update').setDescription('Summary of an update')
-        .addNumberOption(opt => opt.setName('number').setDescription('Update # (defaults to the one in development)').setRequired(false)))
+        .addNumberOption(opt => opt.setName('number').setDescription('Update # (defaults to the one in development)').setRequired(false))
+        .addStringOption(opt => opt.setName('name').setDescription('Or find it by name, e.g. halloween').setRequired(false).setMaxLength(100)))
       .addSubcommand(sub => sub.setName('mine').setDescription('Your open asset tasks'))
       .addSubcommand(sub => sub.setName('item').setDescription("An item's checklist and progress")
         .addStringOption(opt => opt.setName('name').setDescription('Item name, e.g. Aizen').setRequired(true)))
@@ -63,7 +64,8 @@ const taskLine = t => `${MARK[t.status] || '⚪'} \`#${t.ref}\` **${t.internalNa
 
 async function showUpdate(interaction) {
   const number = interaction.options.getNumber('number');
-  const { update, disciplines, attention } = await api('get', '/update', { params: number === null ? {} : { number } });
+  const name = (interaction.options.getString('name') || '').trim();
+  const { update, disciplines, attention } = await api('get', '/update', { params: name ? { name } : number === null ? {} : { number } });
   const embed = new EmbedBuilder()
     .setTitle(`Update #${update.number} · ${update.name}`)
     .setDescription([

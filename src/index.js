@@ -1,6 +1,6 @@
 require('dotenv').config();
 const axios = require('axios');
-const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Events, Partials, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const { handleNewPost, handleRetryButton } = require('./handler');
 const { logMessage, getAttachments } = require('./message-logger');
 const webhookServer = require('./webhook-server');
@@ -31,7 +31,9 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.GuildMessageTyping,
+    GatewayIntentBits.DirectMessages, // the owner's private DMs with the bot (see personal.js)
   ],
+  partials: [Partials.Channel], // DM channels are not cached; without this their messages never arrive
 });
 
 // Support multiple channels via CHANNEL_CONFIG JSON or fallback to individual env vars
@@ -55,6 +57,7 @@ const BOT_SECRET = process.env.BOT_SECRET;
 
 const threadReportMap = new Map();
 const tickets = require('./tickets');
+const personal = require('./personal');
 
 // Register slash commands
 async function registerCommands() {
@@ -92,6 +95,7 @@ async function registerCommands() {
       .toJSON(),
     ...creditCommandDefs(),
     ...assetCommandDefs(), // empty unless ASSETS_ENABLED=true
+    ...personal.getCommandDefinitions(), // /ask /note /remind, owner only, usable anywhere; empty unless PERSONAL_OWNER_DISCORD_ID is set
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -117,6 +121,7 @@ client.once(Events.ClientReady, async (c) => {
   webhookServer.start();
   await registerCommands();
   await reportPause.syncPauseState();
+  personal.start(client); // no-op unless PERSONAL_OWNER_DISCORD_ID is set
   tickets.start(client, threadReportMap); // Ticket Tool tickets as bug reports; off with TICKETS_ENABLED=false
   assetAgent.start(client); // no-op unless ASSET_AGENT_ENABLED=true
   assetStatus.start(client, assetAgent.allowedIds); // no-op unless ASSET_STATUS_POSTS=true
@@ -157,6 +162,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (!interaction.isChatInputCommand()) return;
+
+  if (await personal.handleCommand(interaction)) return;
 
 
   if (interaction.commandName === 'track') {
@@ -518,6 +525,8 @@ client.on(Events.MessageCreate, async (message) => {
     tickets.onBotMessage(message).catch(err => console.error('[Tickets] onBotMessage failed:', err.message));
     return;
   }
+  // A DM to the bot: answered for the owner, ignored for everyone else, and never treated as a report.
+  try { if (await personal.onMessage(message)) return; } catch (err) { console.error('[Personal] onMessage failed:', err.message); return; }
   // Asset agent ingest: only allowlisted channels, and it never throws.
   try { assetAgent.onMessage(message); } catch (err) { console.error('[AssetAgent] onMessage failed:', err.message); }
   if (process.env.IMPORTS_CHANNEL_ID && message.channelId === process.env.IMPORTS_CHANNEL_ID) {

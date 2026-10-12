@@ -438,4 +438,4 @@ function start(client) {
   setInterval(() => tick(client).catch(() => {}), TICK_MS);
 }
 
-module.exports = { start, onMessage, handleButton, suggestionEmbed, allowedIds: () => [...allowed] };
+module.exports = { start, onMessage, handleButton, suggestionEmbed, suggestionButtons, allowedIds: () => [...allowed] };

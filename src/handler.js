@@ -184,7 +184,7 @@ async function handleRetryButton(interaction) {
 
   if (!pending) {
     await interaction.reply({
-      content: '❌ No pending retry found. Try `/reopen` instead.',
+      content: '❌ No pending retry found. Try `/syncreport` instead.',
       ephemeral: true,
     });
     return true;
@@ -228,7 +228,7 @@ async function handleRetryButton(interaction) {
     }
     console.error('[Handler] Manual retry failed:', err.response?.data || err.message);
     await interaction.editReply({
-      content: `❌ Still failing: \`${err.response?.data?.message || err.message}\`\nTry again in a minute or use \`/reopen\` once the backend is back up.`,
+      content: `❌ Still failing: \`${err.response?.data?.message || err.message}\`\nTry again in a minute or use \`/syncreport\` once the backend is back up.`,
     });
   }
 

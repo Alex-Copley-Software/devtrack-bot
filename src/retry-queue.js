@@ -156,7 +156,7 @@ function startAutoRetry(deps) {
           const thread = await deps.client.channels.fetch(entry.threadId).catch(() => null);
           if (thread) {
             await thread.send(
-              `> ❌ **DevTrack could not log this report after multiple attempts.**\n> Please use \`/reopen\` to retry manually, or contact an admin.`
+              `> ❌ **DevTrack could not log this report after multiple attempts.**\n> Please use \`/syncreport\` to retry manually, or contact an admin.`
             ).catch(() => {});
           }
         } catch {}

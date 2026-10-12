@@ -4,8 +4,6 @@ const { Client, GatewayIntentBits, Events, Partials, REST, Routes, SlashCommandB
 const { handleNewPost, handleRetryButton } = require('./handler');
 const { logMessage, getAttachments } = require('./message-logger');
 const webhookServer = require('./webhook-server');
-const { handleTrack } = require('./track-command');
-const { getCommandDefinition: reopenDef, handleReopen, handleReopenStatusSelect } = require('./reopen-command');
 const { handleImportMessage } = require('./import-handler');
 const { handleSyncReport } = require('./sync-report-command');
 const {
@@ -63,33 +61,6 @@ const personal = require('./personal');
 async function registerCommands() {
   const commands = [
     new SlashCommandBuilder()
-      .setName('syncstars')
-      .setDescription('Sync star reaction counts from all suggestion posts')
-      .toJSON(),
-    new SlashCommandBuilder()
-      .setName('leaderboard')
-      .setDescription('Post the bug reporter leaderboard')
-      .addStringOption(opt => opt
-        .setName('period')
-        .setDescription('Time period to show')
-        .setRequired(false)
-        .addChoices(
-          { name: 'This Week', value: 'week' },
-          { name: 'This Month', value: 'month' },
-          { name: 'Last 3 Months', value: '3months' },
-          { name: 'This Year', value: 'year' },
-          { name: 'All Time', value: 'alltime' },
-        ))
-      .toJSON(),
-    new SlashCommandBuilder()
-      .setName('track')
-      .setDescription('Get the DevTrack dashboard link for this report thread')
-      .toJSON(),
-    new SlashCommandBuilder()
-      .setName('reopen')
-      .setDescription('Re-open or locate the DevTrack report for this thread')
-      .toJSON(),
-    new SlashCommandBuilder()
       .setName('syncreport')
       .setDescription('Add this thread to DevTrack if it was missed by automatic tracking')
       .toJSON(),
@@ -138,7 +109,6 @@ client.once(Events.ClientReady, async (c) => {
 client.on(Events.InteractionCreate, async (interaction) => {
  try {
   if (interaction.isStringSelectMenu()) {
-    if (await handleReopenStatusSelect(interaction)) return;
     if (await assetPayouts.handleSelect(interaction)) return;
     return;
   }
@@ -168,16 +138,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (await personal.handleCommand(interaction)) return;
 
 
-  if (interaction.commandName === 'track') {
-    await handleTrack(interaction);
-    return;
-  }
-
-  if (interaction.commandName === 'reopen') {
-    await handleReopen(interaction, WATCHED_CHANNELS, threadReportMap);
-    return;
-  }
-
   if (interaction.commandName === 'syncreport') {
     await handleSyncReport(interaction, WATCHED_CHANNELS, threadReportMap);
     return;
@@ -196,233 +156,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.commandName === 'requestcredit') {
     await handleRequestCredit(interaction, WATCHED_CHANNELS);
     return;
-  }
-
-  if (interaction.commandName === 'leaderboard') {
-    await interaction.deferReply();
-    try {
-      const period = interaction.options.getString('period') || 'alltime';
-      const now = new Date();
-      let since = null;
-      let periodLabel = 'All Time';
-      if (period === 'week')    { since = new Date(now - 7*24*60*60*1000);   periodLabel = 'This Week'; }
-      if (period === 'month')   { since = new Date(now.getFullYear(), now.getMonth(), 1); periodLabel = 'This Month'; }
-      if (period === '3months') { since = new Date(now - 90*24*60*60*1000);  periodLabel = 'Last 3 Months'; }
-      if (period === 'year')    { since = new Date(now.getFullYear(), 0, 1); periodLabel = 'This Year'; }
-
-      // Fetch all reports from backend
-      const res = await axios.get(`${API_URL}/api/bot/reports`, {
-        headers: { 'x-bot-secret': BOT_SECRET },
-        timeout: 15000,
-      });
-      const reports = res.data || [];
-
-      // Tally bug reporters
-      function tally(arr) {
-        const map = {};
-        arr.forEach(r => {
-          // Use discordUserId if available, fallback to discordUser string
-          const key = r.discordUserId || r.discordUser || 'unknown';
-          const name = r.discordUser || 'Unknown';
-          if (!map[key]) map[key] = { name, count: 0, minor: 0, moderate: 0, major: 0, insignificant: 0 };
-          // Insignificant reports are tracked per-reporter but don't add to
-          // their total leaderboard count.
-          if (r.bugLevel !== 'insignificant') map[key].count++;
-          if (r.bugLevel) map[key][r.bugLevel] = (map[key][r.bugLevel] || 0) + 1;
-
-          // Credited co-finder gets the same +1 (and severity breakdown),
-          // additive to the reporter's own count, not a transfer.
-          if (r.creditedDiscordUserId || r.creditedDiscordUser) {
-            const creditKey = r.creditedDiscordUserId || r.creditedDiscordUser;
-            const creditName = r.creditedDiscordUser || 'Unknown';
-            if (!map[creditKey]) map[creditKey] = { name: creditName, count: 0, minor: 0, moderate: 0, major: 0, insignificant: 0 };
-            if (r.bugLevel !== 'insignificant') map[creditKey].count++;
-            if (r.bugLevel) map[creditKey][r.bugLevel] = (map[creditKey][r.bugLevel] || 0) + 1;
-          }
-        });
-        // Return ALL reporters sorted, no slice
-        return Object.values(map).sort((a, b) => b.count - a.count);
-      }
-
-      const filtered = since ? reports.filter(r => new Date(r.createdAt) >= since) : reports;
-      const accepted = filtered.filter(r => !r.queued && (r.type === 'bug' || r.type === 'crash'));
-      const suggestions = filtered.filter(r => !r.queued && r.type === 'suggestion');
-      const bugReporters = tally(accepted);
-      const suggReporters = tally(suggestions);
-
-      if (!bugReporters.length) {
-        return interaction.editReply('No accepted bug reports yet!');
-      }
-
-      const guild = interaction.guild;
-      // Build leaderboard as a text embed instead
-      const medals = ['🥇','🥈','🥉'];
-      // 10 squares per person, ceil to fill exactly 10
-      function makeBar(r) {
-        const total = r.count || 1;
-        const SQUARES = 10;
-        let minorSq = Math.round((r.minor || 0) / total * SQUARES);
-        let modSq   = Math.round((r.moderate || 0) / total * SQUARES);
-        let majSq   = Math.round((r.major || 0) / total * SQUARES);
-        // Adjust to always equal exactly 10
-        let sum = minorSq + modSq + majSq;
-        if (sum < SQUARES) minorSq += (SQUARES - sum);
-        if (sum > SQUARES) {
-          const excess = sum - SQUARES;
-          if (minorSq >= excess) minorSq -= excess;
-          else if (modSq >= excess) modSq -= excess;
-          else majSq -= excess;
-        }
-        return '🟦'.repeat(minorSq) + '🟧'.repeat(modSq) + '🟥'.repeat(majSq);
-      }
-
-      // Paginate — 10 per page
-      const PAGE_SIZE = 10;
-      const totalPages = Math.ceil(bugReporters.length / PAGE_SIZE);
-
-
-      const suggLines = suggReporters.slice(0, 5).map((s, i) =>
-        (medals[i] || ('#' + (i + 1))) + ' **' + s.name + '** — ' + s.count
-      ).join('\n');
-
-            const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-
-      function buildEmbed(pageNum) {
-        const pageR = bugReporters.slice(pageNum * PAGE_SIZE, (pageNum + 1) * PAGE_SIZE);
-        const pageLines = pageR.map((r, i) => {
-          const rank = pageNum * PAGE_SIZE + i;
-          const medal = medals[rank] || ('**#' + (rank+1) + '**');
-          const parts = [r.minor && (r.minor + 'm'), r.moderate && (r.moderate + 'mod'), r.major && (r.major + 'maj')].filter(Boolean).join(' ');
-          const partStr = parts ? ' *(' + parts + ')*' : '';
-          // Insignificant reports are tracked but don't count toward the
-          // total, so they're shown separately, not folded into the bar.
-          const insigStr = r.insignificant ? ' · ' + r.insignificant + ' insignificant' : '';
-          return medal + ' **' + r.name + '** — ' + r.count + ' reports' + partStr + insigStr + '\n' + makeBar(r);
-        }).join('\n');
-
-        return {
-          title: '🏆 Bug Reporter Leaderboard — ' + periodLabel + ' — ' + accepted.length + ' reports',
-          description: pageLines,
-          color: 0x7c6cf0,
-          fields: pageNum === 0 && suggReporters.length ? [{
-            name: '💡 Top Suggestion Contributors',
-            value: suggLines,
-            inline: false
-          }] : [],
-          footer: { text: (guild?.name || 'DevTrack') + ' · ' + periodLabel + ' · Page ' + (pageNum+1) + '/' + totalPages + ' · ' + bugReporters.length + ' reporters' },
-          timestamp: new Date().toISOString(),
-        };
-      }
-
-      function buildRow(pageNum) {
-        if (totalPages <= 1) return null;
-        return new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('lb_prev_' + pageNum).setLabel('◀ Prev').setStyle(ButtonStyle.Secondary).setDisabled(pageNum === 0),
-          new ButtonBuilder().setCustomId('lb_next_' + pageNum).setLabel('Next ▶').setStyle(ButtonStyle.Primary).setDisabled(pageNum >= totalPages - 1),
-        );
-      }
-
-      const firstRow = buildRow(0);
-      const msg = await interaction.editReply({
-        embeds: [buildEmbed(0)],
-        components: firstRow ? [firstRow] : [],
-      });
-
-      if (totalPages > 1) {
-        // Collect button interactions for 5 minutes
-        const collector = msg.createMessageComponentCollector({ time: 5 * 60 * 1000 });
-        collector.on('collect', async btn => {
-          await btn.deferUpdate();
-          const parts2 = btn.customId.split('_');
-          const dir = parts2[1]; // prev or next
-          const curPage = parseInt(parts2[2]);
-          const newPage = dir === 'next' ? curPage + 1 : curPage - 1;
-          const clampedPage = Math.max(0, Math.min(newPage, totalPages - 1));
-          const row = buildRow(clampedPage);
-          await btn.editReply({ embeds: [buildEmbed(clampedPage)], components: row ? [row] : [] });
-        });
-        collector.on('end', async () => {
-          await msg.edit({ components: [] }).catch(() => {});
-        });
-      }
-    } catch (err) {
-      console.error('[Leaderboard]', err.message);
-      await interaction.editReply('❌ Failed to generate leaderboard — check the bot logs.');
-    }
-  }
-
-  if (interaction.commandName === 'syncstars') {
-    if (!interaction.memberPermissions?.has('ManageGuild')) {
-      return interaction.reply({ content: '❌ You need the Manage Server permission to run this.', flags: 64 });
-    }
-    await interaction.reply({ content: '⭐ Scanning suggestion threads for star counts...', flags: 64 });
-    try {
-      const updates = [];
-      for (const [channelId, type] of Object.entries(WATCHED_CHANNELS)) {
-        if (type !== 'suggestion') continue;
-        const channel = await client.channels.fetch(channelId).catch(() => null);
-        if (!channel) continue;
-        console.log(`[SyncStars] Scanning ${channel.name}`);
-        const active = await channel.threads.fetchActive();
-        const archived = await channel.threads.fetchArchived({ limit: 100 });
-        const threads = [...active.threads.values(), ...archived.threads.values()];
-        console.log(`[SyncStars] Found ${threads.length} threads`);
-
-        for (const thread of threads) {
-          try {
-            // Look up reportId first
-            let reportId = threadReportMap.get(thread.id);
-            if (!reportId) {
-              const res = await axios.get(`${API_URL}/api/bot/report-by-thread/${thread.id}`, {
-                headers: { 'x-bot-secret': BOT_SECRET }, timeout: 5000
-              }).catch(() => null);
-              if (res?.data?.reportId) {
-                reportId = res.data.reportId;
-                threadReportMap.set(thread.id, reportId);
-              }
-            }
-            if (!reportId) continue;
-
-            // Fetch the starter message directly via channel messages
-            const starter = await thread.fetchStarterMessage({ cache: false }).catch(() => null);
-            if (!starter) continue;
-
-            // Fetch the message directly to get fresh reaction data
-            const freshMsg = await thread.messages.fetch(starter.id).catch(() => null);
-            if (!freshMsg) continue;
-
-            // Seed ⭐ if not already there
-            const starReaction = freshMsg.reactions.cache.get('⭐');
-            if (!starReaction || starReaction.count === 0) {
-              await starter.react('⭐').catch(() => {});
-              console.log(`[SyncStars] Seeded ⭐ on "${thread.name}"`);
-            }
-
-            // Count minus bot's seed
-            const freshCount = starReaction?.count || 0;
-            const count = Math.max(0, freshCount - 1);
-
-            console.log(`[SyncStars] Thread "${thread.name}": ${count} user stars`);
-            updates.push({ reportId, upvotes: count });
-          } catch (err) {
-            console.error(`[SyncStars] Error on thread ${thread.id}:`, err.message);
-          }
-          await new Promise(r => setTimeout(r, 300));
-        }
-      }
-
-      if (updates.length) {
-        await axios.post(`${API_URL}/api/reports/sync-stars`, { updates }, {
-          headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET },
-          timeout: 15000,
-        });
-      }
-      console.log(`[SyncStars] Done — ${updates.length} posts synced`);
-      await interaction.editReply(`⭐ Synced star counts for **${updates.length}** suggestion posts.`);
-    } catch (err) {
-      console.error('[SyncStars]', err);
-      await interaction.editReply('❌ Star sync failed — check the bot logs.');
-    }
   }
 
  } catch (err) {

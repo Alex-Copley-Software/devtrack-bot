@@ -102,7 +102,9 @@ async function registerCommands() {
   try {
     await rest.put(
       Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),
-      { body: commands }
+      // Everything except the owner's private commands stays a server command: with User Install on,
+      // Discord would otherwise let anyone who adds the app run them outside the server.
+      { body: commands.map(c => (c.integration_types ? c : { ...c, integration_types: [0], contexts: [0] })) }
     );
     console.log('[Commands] Slash commands registered');
   } catch (err) {

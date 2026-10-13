@@ -8,7 +8,7 @@
 // Does nothing unless ASSET_AGENT_ENABLED=true.
 
 const axios = require('axios');
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, MessageFlags } = require('discord.js');
 
 const assetPayouts = require('./asset-payouts');
 
@@ -47,6 +47,7 @@ async function refreshConfig() {
       channels: new Set((config.assistant?.channels || []).map(c => c.id)),
     };
     assetPayouts.configure(config.enabled ? config.payouts : null);
+    syncTeamChannels(config.teamCategoryIds || []).catch(err => console.error('[AssetTeams] Could not report team channels:', err.response?.data?.error || err.message));
     checkAssistantChannels().catch(() => {});
     const token = config.selfTestToken || null;
     if (selfTestSeen !== undefined && token && token !== selfTestSeen && discordClient) {
@@ -58,6 +59,32 @@ async function refreshConfig() {
     if (err.response?.status !== 404) console.error('[AssetAgent] Could not refresh the channel allowlist:', err.message);
     else { allowed = new Set(); assistant = { enabled: false, prefix: '--', admins: new Set(), channels: new Set() }; }
   }
+}
+
+// Teams: each team has a Discord category, and each dev has their own forum
+// inside it. The backend is told which forums exist so it can match each one
+// to its dev by name (which is what gives the forum its status dot, its
+// Payments post and `--` replies). Sent when the list changes, and every half hour.
+let teamChannelsSent = '';
+let teamChannelsAt = 0;
+async function syncTeamChannels(categoryIds) {
+  if (!discordClient || !categoryIds.length) return;
+  const wanted = new Set(categoryIds.map(String));
+  const channels = [];
+  for (const guild of discordClient.guilds.cache.values()) {
+    for (const ch of guild.channels.cache.values()) {
+      if (ch.type !== ChannelType.GuildForum || !wanted.has(String(ch.parentId)) || ch.id === REVIEW_CHANNEL_ID) continue;
+      channels.push({ id: ch.id, name: ch.name, categoryId: ch.parentId });
+    }
+  }
+  // The status dot on a forum's name changes through the day; that is not a new forum.
+  const key = JSON.stringify(channels.map(c => [c.id, c.categoryId]));
+  if (key === teamChannelsSent && Date.now() - teamChannelsAt < 30 * 60 * 1000) return;
+  const result = await api('post', '/team-channels', { channels });
+  teamChannelsSent = key;
+  teamChannelsAt = Date.now();
+  for (const l of result.linked || []) console.log(`[AssetTeams] ${l.team}: forum "${l.channelName}" linked to ${l.dev}`);
+  if (result.linked?.length) refreshConfig();
 }
 
 // Called for every message the bot sees. Only messages in an allowlisted

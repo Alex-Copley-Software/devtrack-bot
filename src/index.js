@@ -56,6 +56,7 @@ const BOT_SECRET = process.env.BOT_SECRET;
 const threadReportMap = new Map();
 const tickets = require('./tickets');
 const personal = require('./personal');
+const bugsCommand = require('./bugs-command');
 
 // Register slash commands
 async function registerCommands() {
@@ -66,6 +67,7 @@ async function registerCommands() {
       .toJSON(),
     ...creditCommandDefs(),
     ...assetCommandDefs(), // empty unless ASSETS_ENABLED=true
+    ...bugsCommand.getCommandDefinitions(), // /bugs search: anonymous lookup of active bug reports
     ...personal.getCommandDefinitions(), // /ask /note /remind, owner only, usable anywhere; empty unless PERSONAL_OWNER_DISCORD_ID is set
   ];
 
@@ -136,6 +138,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (await personal.handleCommand(interaction)) return;
+  if (await bugsCommand.handleBugs(interaction)) return;
 
 
   if (interaction.commandName === 'syncreport') {

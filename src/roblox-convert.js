@@ -13,6 +13,10 @@
 // The worker's ✅ card carries a "Flip 180° and redo" button for characters modelled facing backwards;
 // pressing it queues the same job again with flip set.
 //
+// Both commands work anywhere: servers, the bot's DM, and other DMs and group chats (User Install).
+// The bot can't read other people's DMs, so the job carries the attachment links Discord hands it
+// with the right-click; the worker downloads from those.
+//
 // Only CONVERT_OWNER_ID can run it. Off with CONVERT_ENABLED=false.
 
 const {
@@ -30,15 +34,26 @@ const FLIP_BUTTON = 'rbxconvert-flip'; // set by the worker on its ✅ card
 const FOOTER = 'rbxconvert v1';
 const INPUT_EXT = /\.(blend|zip|png|jpe?g|tga)$/i;
 const IMAGE_EXT = /\.(png|jpe?g|bmp|tga|zip)$/i;
+// integration_types 0 and 1: installed to a server or to a user's account.
+// contexts 0, 1, 2: usable in servers, in the bot's own DM, and in other DMs and group chats.
+const ANYWHERE = { integration_types: [0, 1], contexts: [0, 1, 2] };
+
+// Attachments of the right-clicked message, kept until its form is submitted (the modal can't carry them)
+const pendingFiles = new Map();
+const filesOf = (message, ext) => [...message.attachments.values()]
+  .filter(a => ext.test(a.name)).slice(0, 10).map(a => ({ name: a.name, url: a.url }));
 
 function getCommandDefinitions() {
   if (!ENABLED) return [];
-  // Hidden from non-admins; the handlers still check the owner ID.
-  return [COMMAND, IMAGES_COMMAND].map(name => new ContextMenuCommandBuilder()
-    .setName(name)
-    .setType(ApplicationCommandType.Message)
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .toJSON());
+  // Hidden from non-admins in servers; the handlers still check the owner ID.
+  return [COMMAND, IMAGES_COMMAND].map(name => ({
+    ...new ContextMenuCommandBuilder()
+      .setName(name)
+      .setType(ApplicationCommandType.Message)
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .toJSON(),
+    ...ANYWHERE,
+  }));
 }
 
 // "4.0 Upd Bleach Stark.blend" -> "UpdBleachStark", "Byakuya_Model.blend" -> "Byakuya_Model"
@@ -62,6 +77,9 @@ async function handleContextMenu(interaction) {
     await interaction.reply({ content: '❌ That message has no .blend (or .zip) attached.', flags: 64 });
     return true;
   }
+  const key = `${interaction.targetMessage.channelId}:${interaction.targetMessage.id}`;
+  pendingFiles.set(key, filesOf(interaction.targetMessage, INPUT_EXT));
+  setTimeout(() => pendingFiles.delete(key), 30 * 60 * 1000).unref?.();
   const modal = new ModalBuilder()
     .setCustomId(`${MODAL}:${interaction.targetMessage.channelId}:${interaction.targetMessage.id}`)
     .setTitle('Convert to Roblox')
@@ -108,7 +126,10 @@ async function handleModal(interaction) {
     if (typeof rename !== 'object' || Array.isArray(rename) || !rename) return bad('Part renames must be a JSON object.');
   }
 
-  const job = { channelId, messageId, names, size, rename, flip };
+  // Without files (bot restarted mid-form) the worker fetches the message itself, which works where the bot is
+  const files = pendingFiles.get(`${channelId}:${messageId}`);
+  pendingFiles.delete(`${channelId}:${messageId}`);
+  const job = { channelId, messageId, names, size, rename, flip, ...(files ? { files } : {}) };
   const source = `https://discord.com/channels/${interaction.guildId || '@me'}/${channelId}/${messageId}`;
   try {
     await queue(interaction.user, job, source);
@@ -122,12 +143,13 @@ async function handleModal(interaction) {
 
 async function queueImages(interaction) {
   const msg = interaction.targetMessage;
-  const count = [...msg.attachments.values()].filter(a => IMAGE_EXT.test(a.name)).length;
+  const files = filesOf(msg, IMAGE_EXT);
+  const count = files.length;
   if (!count) {
     await interaction.reply({ content: '❌ That message has no images (or .zip of images) attached.', flags: 64 });
     return true;
   }
-  const job = { kind: 'images', channelId: msg.channelId, messageId: msg.id };
+  const job = { kind: 'images', channelId: msg.channelId, messageId: msg.id, files };
   const source = `https://discord.com/channels/${interaction.guildId || '@me'}/${msg.channelId}/${msg.id}`;
   const card = new EmbedBuilder()
     .setTitle(`⏳ Queued: images (${count} attachment${count === 1 ? '' : 's'})`)

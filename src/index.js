@@ -129,6 +129,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (await assetAgent.handleButton(interaction)) return;
     if (await qaCheck.handleButton(interaction)) return;
     if (await assetPayouts.handleButton(interaction)) return;
+    if (await robloxConvert.handleButton(interaction)) return;
     return;
   }
 

@@ -7,6 +7,9 @@
 // (~/Documents/Roblox/tools/discord_worker.py) watches that DM through the Discord API,
 // does the conversion and posts the files back into the same DM. Nothing is posted publicly.
 //
+// The worker's ✅ card carries a "Flip 180° and redo" button for characters modelled facing backwards;
+// pressing it queues the same job again with flip set.
+//
 // Only CONVERT_OWNER_ID can run it. Off with CONVERT_ENABLED=false.
 
 const {
@@ -18,6 +21,7 @@ const ENABLED = String(process.env.CONVERT_ENABLED || 'true').toLowerCase() !== 
 const OWNER_ID = process.env.CONVERT_OWNER_ID || '618957089833877518';
 const COMMAND = 'Convert to Roblox';
 const MODAL = 'rbxconvert';
+const FLIP_BUTTON = 'rbxconvert-flip'; // set by the worker on its ✅ card
 // The worker finds job cards by this footer; keep the two in sync.
 const FOOTER = 'rbxconvert v1';
 const INPUT_EXT = /\.(blend|zip|png|jpe?g|tga)$/i;
@@ -68,6 +72,9 @@ async function handleContextMenu(interaction) {
         .setCustomId('rename').setLabel('Part renames, JSON (optional)')
         .setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(1500)
         .setPlaceholder('{"Cube.002": "Torso", "Cube.005": "LeftArm"}')),
+      new ActionRowBuilder().addComponents(new TextInputBuilder()
+        .setCustomId('flip').setLabel('Turn 180°? (yes if it was modelled backwards)')
+        .setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(5).setPlaceholder('no')),
     );
   await interaction.showModal(modal);
   return true;
@@ -83,6 +90,7 @@ async function handleModal(interaction) {
   const names = interaction.fields.getTextInputValue('names').split(',').map(s => s.trim()).filter(Boolean);
   const size = interaction.fields.getTextInputValue('size').trim() || 'auto';
   const renameText = interaction.fields.getTextInputValue('rename').trim();
+  const flip = /^(y|yes|true|1)$/i.test(interaction.fields.getTextInputValue('flip').trim());
 
   const bad = msg => interaction.reply({ content: `❌ ${msg}`, flags: 64 }).then(() => true);
   if (!names.length || names.some(n => !/^[A-Za-z0-9_]{1,40}$/.test(n))) {
@@ -95,24 +103,49 @@ async function handleModal(interaction) {
     if (typeof rename !== 'object' || Array.isArray(rename) || !rename) return bad('Part renames must be a JSON object.');
   }
 
-  const job = { channelId, messageId, names, size, rename };
+  const job = { channelId, messageId, names, size, rename, flip };
   const source = `https://discord.com/channels/${interaction.guildId || '@me'}/${channelId}/${messageId}`;
-  const card = new EmbedBuilder()
-    .setTitle(`⏳ Queued: ${names.join(', ')}`)
-    .setColor(0xf0b232)
-    .setDescription('Waiting for the Mac worker.\n```json\n' + JSON.stringify(job) + '\n```')
-    .addFields({ name: 'Source', value: source })
-    .setFooter({ text: FOOTER })
-    .setTimestamp(new Date());
   try {
-    await interaction.user.send({ embeds: [card] });
+    await queue(interaction.user, job, source);
   } catch (err) {
     console.error('[RobloxConvert] DM failed:', err.message);
     return bad("Couldn't DM you the job. Allow DMs from this server's members and try again.");
   }
   await interaction.reply({ content: `✅ Queued **${names.join(', ')}**. The files will arrive in your DMs.`, flags: 64 });
-  console.log(`[RobloxConvert] Queued ${names.join(',')} from ${channelId}/${messageId}`);
   return true;
 }
 
-module.exports = { getCommandDefinitions, handleContextMenu, handleModal, FOOTER };
+// The job card the Mac worker picks up (it matches on FOOTER and the ⏳ title)
+async function queue(user, job, source) {
+  const card = new EmbedBuilder()
+    .setTitle(`⏳ Queued: ${job.names.join(', ')}${job.flip ? ' (turned 180°)' : ''}`)
+    .setColor(0xf0b232)
+    .setDescription('Waiting for the Mac worker.\n```json\n' + JSON.stringify(job) + '\n```')
+    .addFields({ name: 'Source', value: source })
+    .setFooter({ text: FOOTER })
+    .setTimestamp(new Date());
+  await user.send({ embeds: [card] });
+  console.log(`[RobloxConvert] Queued ${job.names.join(',')}${job.flip ? ' flipped' : ''} from ${job.channelId}/${job.messageId}`);
+}
+
+async function handleButton(interaction) {
+  if (interaction.customId !== FLIP_BUTTON) return false;
+  if (interaction.user.id !== OWNER_ID) {
+    await interaction.reply({ content: '❌ Only the owner can run this.', flags: 64 });
+    return true;
+  }
+  const embed = interaction.message.embeds[0];
+  const json = embed?.description?.match(/```json\n([\s\S]*?)\n```/);
+  if (!json) {
+    await interaction.reply({ content: "❌ Couldn't read the job on this card.", flags: 64 });
+    return true;
+  }
+  const job = JSON.parse(json[1]);
+  job.flip = !job.flip;
+  const source = embed.fields?.find(f => f.name === 'Source')?.value || '';
+  await interaction.update({ components: [] }); // one redo per card
+  await queue(interaction.user, job, source);
+  return true;
+}
+
+module.exports = { getCommandDefinitions, handleContextMenu, handleModal, handleButton, FOOTER };

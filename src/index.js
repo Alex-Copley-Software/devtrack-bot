@@ -19,6 +19,7 @@ const assetStatus = require('./asset-status');
 const qaCheck = require('./qa-check');
 const assetPayouts = require('./asset-payouts');
 const { getCommandDefinitions: assetCommandDefs, handleAssets } = require('./assets-command');
+const robloxConvert = require('./roblox-convert');
 
 const CREDIT_ESCALATION_POLL_MS = 15 * 60 * 1000;
 
@@ -69,6 +70,7 @@ async function registerCommands() {
     ...assetCommandDefs(), // empty unless ASSETS_ENABLED=true
     ...bugsCommand.getCommandDefinitions(), // /bugs search: anonymous lookup of active bug reports
     ...personal.getCommandDefinitions(), // /ask /note /remind, owner only, usable anywhere; empty unless PERSONAL_OWNER_DISCORD_ID is set
+    ...robloxConvert.getCommandDefinitions(), // right-click → Apps → Convert to Roblox (owner only)
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -133,7 +135,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit()) {
     if (await qaCheck.handleModal(interaction)) return;
     if (await assetPayouts.handleModal(interaction)) return;
+    if (await robloxConvert.handleModal(interaction)) return;
   }
+
+  if (await robloxConvert.handleContextMenu(interaction)) return;
 
   if (!interaction.isChatInputCommand()) return;
 

@@ -55,9 +55,29 @@ const API_URL = process.env.API_URL || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
 
 const threadReportMap = new Map();
+
+// The report a forum post belongs to. threadReportMap is empty after every
+// restart, so a post missing from it is asked about once; a post with no
+// report is not asked about again for ten minutes.
+const threadMisses = new Map(); // threadId -> when the lookup found no report
+async function reportForThread(threadId) {
+  const cached = threadReportMap.get(threadId);
+  if (cached) return cached;
+  if (Date.now() - (threadMisses.get(threadId) || 0) < 10 * 60 * 1000) return null;
+  try {
+    const { data } = await axios.get(`${API_URL}/api/bot/report-by-thread/${threadId}`, {
+      headers: { 'x-bot-secret': BOT_SECRET }, timeout: 15000,
+    });
+    threadReportMap.set(threadId, data.reportId);
+    return data.reportId;
+  } catch (err) {
+    if (err.response?.status === 404) threadMisses.set(threadId, Date.now());
+    else console.error(`[Reports] Could not look up the report for thread ${threadId}:`, err.message);
+    return null;
+  }
+}
 const tickets = require('./tickets');
 const personal = require('./personal');
-const bugsCommand = require('./bugs-command');
 
 // Register slash commands
 async function registerCommands() {
@@ -68,7 +88,7 @@ async function registerCommands() {
       .toJSON(),
     ...creditCommandDefs(),
     ...assetCommandDefs(), // empty unless ASSETS_ENABLED=true
-    ...bugsCommand.getCommandDefinitions(), // /bugs search: anonymous lookup of active bug reports
+    ...qaCheck.getCommandDefinitions(), // /qadelay: how long before an unanswered QA check goes to QA Requests (admins)
     ...personal.getCommandDefinitions(), // /ask /note /remind, owner only, usable anywhere; empty unless PERSONAL_OWNER_DISCORD_ID is set
     ...robloxConvert.getCommandDefinitions(), // right-click → Apps → Convert to Roblox (owner only)
   ];
@@ -95,11 +115,12 @@ client.once(Events.ClientReady, async (c) => {
   });
   console.log(`  API          → ${process.env.API_URL}`);
   qaCheck.setClient(client);
+  qaCheck.start(); // posts checks left unanswered in QA Requests
   webhookServer.start();
   await registerCommands();
   await reportPause.syncPauseState();
   personal.start(client); // no-op unless PERSONAL_OWNER_DISCORD_ID is set
-  tickets.start(client, threadReportMap); // Ticket Tool tickets as bug reports; off with TICKETS_ENABLED=false
+  tickets.start(client, threadReportMap); // the remaining Ticket Tool tickets; off with TICKETS_ENABLED=false
   assetAgent.start(client); // no-op unless ASSET_AGENT_ENABLED=true
   assetStatus.start(client, assetAgent.allowedIds); // no-op unless ASSET_STATUS_POSTS=true
 
@@ -144,7 +165,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (await personal.handleCommand(interaction)) return;
-  if (await bugsCommand.handleBugs(interaction)) return;
+  if (await qaCheck.handleCommand(interaction)) return;
 
 
   if (interaction.commandName === 'syncreport') {
@@ -289,7 +310,7 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  // Ticket Tool tickets are text channels, not threads; they log themselves.
+  // A ticket left over from Ticket Tool is a text channel, not a thread; it logs itself.
   try { if (await tickets.onMessage(message)) return; } catch (err) { console.error('[Tickets] onMessage failed:', err.message); }
 
   if (!message.channel?.isThread()) return;
@@ -300,9 +321,9 @@ client.on(Events.MessageCreate, async (message) => {
   if (WATCHED_CHANNELS[parentId] === 'import') return;
 
   const threadId = thread.id;
-  const reportId = threadReportMap.get(threadId);
+  const reportId = await reportForThread(threadId);
   if (!reportId) {
-    console.log(`[MessageCreate] Thread ${threadId} not in cache — skipping`);
+    console.log(`[MessageCreate] Thread ${threadId} has no report — skipping`);
     return;
   }
 
@@ -319,10 +340,6 @@ client.on(Events.MessageCreate, async (message) => {
   });
 });
 
-
-client.on(Events.ChannelCreate, (channel) => {
-  try { tickets.onChannelCreate(channel); } catch (err) { console.error('[Tickets] onChannelCreate failed:', err.message); }
-});
 
 client.on(Events.ChannelDelete, (channel) => {
   tickets.onChannelDelete(channel).catch(err => console.error('[Tickets] onChannelDelete failed:', err.message));
@@ -345,7 +362,7 @@ async function syncStarCount(reaction, isSuggestion) {
   // Subtract 1 for the bot's own seed reaction
   const count = Math.max(0, (starReaction?.count || 0) - 1);
 
-  const reportId = threadReportMap.get(thread.id);
+  const reportId = await reportForThread(thread.id);
   if (!reportId) return;
 
   try {

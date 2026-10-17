@@ -97,13 +97,10 @@ async function handleSyncReport(interaction, WATCHED_CHANNELS, threadReportMap) 
   }
 
   // ── 2. Not tracked — create it from the starter post ───────────────────────
-  // A ticket has no starter post: the report is built from what its opener wrote.
+  // Bug reports are forum posts again; a ticket with no report stays untracked.
   if (isTicket) {
-    const ticketReportId = await tickets.intake(thread);
     return interaction.editReply({
-      content: ticketReportId
-        ? `✅ **This ticket is now tracked in DevTrack.**\n${dashboardLink(ticketReportId)}`
-        : '❌ Nothing to log yet: the person who opened this ticket has not written anything in it.',
+      content: '❌ New tickets are not logged in DevTrack any more. Ask the reporter to post it in the bug reports forum.',
     });
   }
 

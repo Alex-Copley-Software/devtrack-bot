@@ -2,6 +2,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { logMessage, getAttachments } = require('./message-logger');
+const { devTagsFor } = require('./dev-tags');
 
 const API_URL    = process.env.API_URL    || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
@@ -43,6 +44,8 @@ function buildForm({ thread, starterMessage, reportType }) {
   if (attachments.length > 0) {
     form.append('attachmentUrls', JSON.stringify(attachments));
   }
+  const tags = devTagsFor(thread);
+  if (tags.length) form.append('devTags', JSON.stringify(tags));
   return form;
 }
 

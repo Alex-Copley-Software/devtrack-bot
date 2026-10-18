@@ -171,8 +171,24 @@ async function getClient() {
   });
 }
 
+// QA proof from the dashboard is attached to the message when it fits under
+// Discord's upload limit, otherwise linked so Discord embeds it.
+const PROOF_ATTACH_LIMIT = 9 * 1024 * 1024;
+
+function proofFiles(proof) {
+  const list = (Array.isArray(proof) ? proof : []).filter(p => /^https?:\/\//.test(p?.url || ''));
+  const total = list.reduce((sum, p) => sum + (Number(p.size) || 0), 0);
+  const attach = list.length && total <= PROOF_ATTACH_LIMIT ? list : [];
+  return { list, attach };
+}
+
+function proofLines(list) {
+  if (!list.length) return '';
+  return [`> **Proof:**`, ...list.map(p => p.url)].join('\n');
+}
+
 // ── Core action ───────────────────────────────────────────────────────────────
-async function applyThreadAction({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner }) {
+async function applyThreadAction({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner, verifiedBy, proof }) {
   try {
     const client = await getClient();
     const thread = await client.channels.fetch(threadId);
@@ -217,6 +233,7 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
     console.log(`[Discord] notifyOwner: ${notifyOwner}, userId: ${discordUserId}`);
     const pingId = notifyOwner ? discordUserId : null;
     let message = buildMessage(messageAction, { mention: pingId, bugLevel, devNotes, assigneeName });
+    if (message && verifiedBy) message += `\n> **Verified by:** ${verifiedBy}`;
     if (isTicket && message) {
       message = message
         .replace('We\'ll keep this thread updated', 'We\'ll keep this ticket updated')
@@ -228,7 +245,15 @@ async function applyThreadAction({ threadId, reportType, action, bugLevel, devNo
     console.log(`[Discord] message: ${message.slice(0, 80)}`);
 
     if (message) {
-      await thread.send(message);
+      const { list, attach } = proofFiles(proof);
+      const files = attach.map(p => ({ attachment: p.url, name: p.filename || 'proof' }));
+      try {
+        await thread.send({ content: (attach.length ? message : [message, proofLines(list)].filter(Boolean).join('\n')).slice(0, 2000), files });
+      } catch (err) {
+        if (!files.length) throw err;
+        console.error(`[Discord] Could not attach QA proof, linking it instead:`, err.message);
+        await thread.send([message, proofLines(list)].join('\n').slice(0, 2000));
+      }
       console.log(`[Discord] Message posted in thread ${threadId}`);
     }
 

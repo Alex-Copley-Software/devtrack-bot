@@ -122,7 +122,7 @@ function start() {
         return;
       }
 
-      const { threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner } = body;
+      const { threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner, verifiedBy, proof } = body;
 
       if (!threadId || !action) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -136,7 +136,7 @@ function start() {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true }));
 
-      await applyThreadAction({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner });
+      await applyThreadAction({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner, verifiedBy, proof });
 
     } catch (err) {
       console.error('[Webhook] Error:', err.message);

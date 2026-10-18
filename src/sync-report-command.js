@@ -9,6 +9,7 @@ const axios = require('axios');
 const tickets = require('./tickets');
 const FormData = require('form-data');
 const { logMessage, getAttachments } = require('./message-logger');
+const { devTagsFor } = require('./dev-tags');
 
 const API_URL = process.env.API_URL || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
@@ -135,6 +136,8 @@ async function handleSyncReport(interaction, WATCHED_CHANNELS, threadReportMap) 
   form.append('discordMessageId', starterMessage.id);
   const attachments = buildAttachmentList(starterMessage);
   if (attachments.length > 0) form.append('attachmentUrls', JSON.stringify(attachments));
+  const tags = devTagsFor(thread);
+  if (tags.length) form.append('devTags', JSON.stringify(tags));
 
   let reportId;
   try {

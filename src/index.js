@@ -17,6 +17,7 @@ const reportPause = require('./report-pause');
 const assetAgent = require('./asset-agent');
 const assetStatus = require('./asset-status');
 const qaCheck = require('./qa-check');
+const devTags = require('./dev-tags');
 const assetPayouts = require('./asset-payouts');
 const { getCommandDefinitions: assetCommandDefs, handleAssets } = require('./assets-command');
 const robloxConvert = require('./roblox-convert');
@@ -123,6 +124,8 @@ client.once(Events.ClientReady, async (c) => {
   tickets.start(client, threadReportMap); // the remaining Ticket Tool tickets; off with TICKETS_ENABLED=false
   assetAgent.start(client); // no-op unless ASSET_AGENT_ENABLED=true
   assetStatus.start(client, assetAgent.allowedIds); // no-op unless ASSET_STATUS_POSTS=true
+  // Dev-name tags (Ricky, Bryan, ...) on every post in the report forums.
+  devTags.syncAll(client, Object.keys(WATCHED_CHANNELS).filter(id => WATCHED_CHANNELS[id] !== 'import'));
 
   escalateStaleCreditRequests(client).catch(err => console.error('[CreditEscalation] Initial poll failed:', err.message));
   setInterval(() => {
@@ -200,6 +203,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     console.error('[InteractionCreate] Could not notify user of the error:', replyErr.message);
   }
  }
+});
+
+// A tester added or removed a dev-name tag on a report post.
+client.on(Events.ThreadUpdate, (oldThread, newThread) => {
+  const type = WATCHED_CHANNELS[newThread.parentId];
+  if (!type || type === 'import') return;
+  devTags.onThreadUpdate(oldThread, newThread);
 });
 
 // New forum post created

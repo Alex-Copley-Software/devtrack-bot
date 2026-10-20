@@ -78,12 +78,15 @@ async function postCheck({ checkId, threadId, discordUserId, title, requireVideo
   }
 }
 
-// Retires the QA Requests post once the check is over, whoever ended it.
+// Deletes the QA Requests post once the check is over, whoever ended it, so the channel only
+// holds checks still waiting. If it cannot be deleted, it is retired in place with the outcome.
 async function closeEscalation({ escalationChannelId, escalationMessageId }, line) {
   if (!client || !escalationChannelId || !escalationMessageId) return;
   const channel = await client.channels.fetch(escalationChannelId).catch(() => null);
   const message = await channel?.messages.fetch(escalationMessageId).catch(() => null);
-  if (message) await message.edit({ content: `${message.content}\n\n${line}`, components: [], allowedMentions: { parse: [] } }).catch(() => {});
+  if (!message) return;
+  const deleted = await message.delete().then(() => true, () => false);
+  if (!deleted) await message.edit({ content: `${message.content}\n\n${line}`, components: [], allowedMentions: { parse: [] } }).catch(() => {});
 }
 
 // Staff got there first, or the report left QA Review: retire the buttons and say why.

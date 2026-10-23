@@ -7,7 +7,6 @@ const DASHBOARD_URL = process.env.DASHBOARD_URL || 'https://lambent-lily-7bf643.
 const REVIEWER_ALERT_CHANNEL_ID = process.env.REVIEWER_ALERT_CHANNEL_ID || '1500338092077482107';
 const REVIEWER_ROLE_ID = process.env.REVIEWER_ROLE_ID || '1500338695906267388';
 const QA_ALERT_CHANNEL_ID = process.env.QA_ALERT_CHANNEL_ID || '1500338135077490720';
-const QA_ROLE_ID = process.env.QA_ROLE_ID || '1499133772187041893';
 const PATCH_FIXES_CHANNEL_ID = process.env.PATCH_FIXES_CHANNEL_ID || '1536725066166046841';
 const TESTERS_ROLE_ID = process.env.TESTERS_ROLE_ID || '1425326818444967957';
 const SENIOR_TESTER_ROLE_ID = process.env.SENIOR_TESTER_ROLE_ID || '1424553941722726550';
@@ -291,7 +290,8 @@ async function sendServerAlert({ kind, count, oldestAge, url }) {
     const client = await getClient();
     const isQueue = kind === 'queue_backlog';
     const channelId = isQueue ? REVIEWER_ALERT_CHANNEL_ID : QA_ALERT_CHANNEL_ID;
-    const roleId = isQueue ? REVIEWER_ROLE_ID : QA_ROLE_ID;
+    // Only the review queue pings its role; QA alerts post without a mention.
+    const roleId = isQueue ? REVIEWER_ROLE_ID : null;
     const channel = await client.channels.fetch(channelId);
     if (!channel) {
       console.error(`[Discord] Alert channel ${channelId} not found`);
@@ -324,10 +324,10 @@ async function sendServerAlert({ kind, count, oldestAge, url }) {
     );
 
     await channel.send({
-      content: `<@&${roleId}>`,
+      ...(roleId ? { content: `<@&${roleId}>` } : {}),
       embeds: [embed],
       components: [row],
-      allowedMentions: { roles: [roleId] },
+      allowedMentions: { roles: roleId ? [roleId] : [] },
     });
     console.log(`[Discord] Sent ${kind} alert to ${channelId}`);
   } catch (err) {

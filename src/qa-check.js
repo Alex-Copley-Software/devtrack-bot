@@ -10,6 +10,9 @@
 // on only whoever holds it there can answer, the reporter included: Take this
 // check makes it one person's for 30 minutes, nobody else can take it in that
 // time, and they answer it in the report's thread with their own video or photo.
+// Each person can hold one QA Request at a time (checks on their own reports
+// do not count); the backend refuses a second until the first is answered or
+// runs out.
 //
 //   backend -> POST /qa-check          ask (posts the message with buttons)
 //   backend -> POST /qa-check-update   staff approved it first, or it left QA Review
@@ -43,6 +46,9 @@ function buttons(checkId) {
     new ButtonBuilder().setCustomId(`qa_check:notfixed:${checkId}`).setLabel('Not fixed').setStyle(ButtonStyle.Danger),
   );
 }
+
+const TAKE_LINE = '> Press **Take this check**: it is yours for 30 minutes and nobody else can take it. You can hold one QA Request at a time. '
+  + 'Test it in game, post a video or photo in the report\'s post, then press **Fixed** or **Not fixed** there.';
 
 function takeButtons(checkId, checkUrl) {
   return new ActionRowBuilder().addComponents(
@@ -149,7 +155,7 @@ async function escalate(check, minutes) {
     content: [
       `🧪 **QA check needed:** ${String(check.title || thread.name).slice(0, 200)}`,
       `> The tester who filed this was asked to check the fix over ${minutesText(minutes)} ago and has not answered, so anyone can.`,
-      `> Press **Take this check**: it is yours for 30 minutes and nobody else can take it. Test it in game, post a video or photo in the report's post, then press **Fixed** or **Not fixed** there.`,
+      TAKE_LINE,
     ].join('\n'),
     components: [takeButtons(check.id, checkUrl)],
     allowedMentions: { parse: [] },
@@ -167,6 +173,7 @@ async function escalateDue() {
   if (escalating || !client) return;
   escalating = true;
   try {
+    if (!claimsReleased) await releaseClaimsOnce();
     const { checks, minutes } = await api('get', '/qa-checks/due-escalation');
     for (const check of checks) {
       await escalate(check, minutes).catch(err => console.error(`[QaCheck] Could not open up check ${check.id}:`, err.response?.data?.error || err.message));
@@ -175,6 +182,46 @@ async function escalateDue() {
     console.error('[QaCheck] Escalation check failed:', err.response?.data?.error || err.message);
   } finally {
     escalating = false;
+  }
+}
+
+// ── one claim at a time ───────────────────────────────────────────────────────
+
+// When one QA Request at a time came in, every claim was handed back so
+// everyone takes them again under the new rule. The backend does it the
+// first time only; this retries every poll until the backend has answered.
+const CLAIMS_RESET = '2026-10-26-one-claim';
+let claimsReleased = false;
+async function releaseClaimsOnce() {
+  try {
+    const { released, skipped } = await api('post', '/qa-checks/release-claims', { once: CLAIMS_RESET });
+    claimsReleased = true;
+    if (skipped) return;
+    for (const check of released) await tidyReleased(check).catch(err => console.error(`[QaCheck] Could not update released check ${check.id}:`, err.message));
+    console.log(`[QaCheck] Handed back ${released.length} QA Request claim(s) for the one-at-a-time rule`);
+  } catch (err) {
+    console.error('[QaCheck] Could not release QA Request claims yet:', err.response?.data?.error || err.message);
+  }
+}
+
+// Its QA Requests message no longer names a holder, and someone still in the
+// middle of it is told to take it again.
+async function tidyReleased(check) {
+  if (check.escalationChannelId && check.escalationMessageId) {
+    const channel = await client.channels.fetch(check.escalationChannelId).catch(() => null);
+    const message = await channel?.messages.fetch(check.escalationMessageId).catch(() => null);
+    if (message) {
+      const lines = message.content.split('\n').filter(l => !l.startsWith('🙋') && !l.startsWith('🔄'))
+        .map(l => (l.startsWith('> Press **Take this check**') ? TAKE_LINE : l));
+      await message.edit({ content: [...lines, '🔄 Claims were reset: this check is free to take again.'].join('\n'), allowedMentions: { parse: [] } }).catch(() => {});
+    }
+  }
+  if (check.active && check.holder) {
+    const thread = await client.channels.fetch(check.threadId).catch(() => null);
+    await thread?.send({
+      content: `🔄 <@${check.holder}> QA Requests now allow one claim per person at a time, so every claim was reset. If you are still checking this one, press **Take this check** in QA Requests again before answering.`,
+      allowedMentions: { users: [check.holder] },
+    }).catch(() => {});
   }
 }
 
@@ -239,6 +286,7 @@ async function handleTake(interaction) {
       '3. Post a video or photo there showing the result.',
       '4. Press **Fixed** or **Not fixed** on the check message.',
       `Nobody else can answer or take it until then. If you have not answered by then, anyone can take it, and you would have to take it again.`,
+      'You can take another QA Request once you have answered this one (or your time on it runs out).',
     ].join('\n'));
     // Everyone in QA Requests and in the report's post can see who has it.
     const lines = interaction.message.content.split('\n').filter(l => !l.startsWith('🙋'));

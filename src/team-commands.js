@@ -3,8 +3,9 @@
 // find it (a multiplayer bug needs more than one player). The report's pay
 // is split evenly between the reporter and the team, instead of paid to
 // each. Server moderators (Manage Threads) can change any report's team.
-// /leaderboard — a tester's own numbers: reports filed and accepted, pay
-// earned and paid, and their rank. Only they see the reply.
+// /leaderboard — a tester's own numbers for the current pay period (as set
+// up on the payouts page): reports filed and accepted, pay earned, and their
+// rank, plus what they have been paid so far. Only they see the reply.
 
 const axios = require('axios');
 const { PermissionFlagsBits, SlashCommandBuilder } = require('discord.js');
@@ -33,7 +34,7 @@ function getCommandDefinitions() {
       .toJSON(),
     new SlashCommandBuilder()
       .setName('leaderboard')
-      .setDescription('Your own tester stats: reports, accepted bugs, pay and rank (only you see it)')
+      .setDescription('Your own tester stats for this pay period: reports, accepted bugs, pay and rank (only you see it)')
       .toJSON(),
   ];
 }
@@ -94,24 +95,27 @@ const LEVELS = [['major', 'Major'], ['moderate', 'Moderate'], ['minor', 'Minor']
 async function handleLeaderboard(interaction) {
   await interaction.deferReply({ ephemeral: true });
   try {
-    const s = await api('get', `/tester-stats/${interaction.user.id}`, undefined, 60000); // works out pay over all time
+    const s = await api('get', `/tester-stats/${interaction.user.id}`, undefined, 60000);
     const cash = n => `${s.currency}${Number(n || 0).toFixed(2)}`;
+    const day = d => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
     const levels = LEVELS.filter(([k]) => s.levels[k]).map(([k, name]) => `${name} ${s.levels[k]}`).join(' · ');
     const extras = [
       s.shared ? `${s.shared} shared with a team` : '',
       s.credited ? `${s.credited} credited to you` : '',
       s.noLevel ? `${s.noLevel} still need a bug level` : '',
     ].filter(Boolean).join(' · ');
+    const range = s.period
+      ? `**${s.period.name}** (${day(s.period.startsOn)} to ${day(s.period.endsOn)})${s.period.paid ? ', paid' : ''}`
+      : s.from ? `**since ${day(s.from)}** (no pay period covers today yet)` : '**all time** (no pay periods set up yet)';
     await interaction.editReply([
-      `📊 **Your DevTrack stats**`,
-      s.rank ? `> 🏆 **#${s.rank}** of ${s.testers} testers by accepted reports` : '> 🏆 Not ranked yet: none of your reports have been accepted.',
+      `📊 **Your DevTrack stats:** ${range}`,
+      s.rank ? `> 🏆 **#${s.rank}** of ${s.testers} testers by accepted reports` : '> 🏆 Not ranked: none of your reports have been accepted in this period.',
       `> 📝 **Filed:** ${s.filed.total} · in the queue ${s.filed.queued} · being worked on ${s.filed.active} · resolved ${s.filed.resolved} · declined ${s.filed.declined}`,
       `> ✅ **Accepted:** ${s.accepted}${levels ? ` (${levels})` : ''}`,
       extras ? `> ${extras}` : '',
       `> 🧪 **Fixes you confirmed:** ${s.verifiedFixes}`,
-      `> 💰 **Earned:** ${cash(s.earned)} at today's prices`,
-      s.paidPeriods ? `> 💸 **Paid so far:** ${cash(s.paid)} over ${s.paidPeriods} pay period${s.paidPeriods === 1 ? '' : 's'}` : '',
-      s.sinceLastPaid ? `> ⏳ **Since ${s.sinceLastPaid.from}** (after the last paid period): ${cash(s.sinceLastPaid.amount)}` : '',
+      s.period?.paid ? `> 💰 **Paid for this period:** ${cash(s.earned)}` : `> 💰 **Earned so far:** ${cash(s.earned)} at today's prices`,
+      s.paidPeriods ? `> 💸 **Paid in total:** ${cash(s.paid)} over ${s.paidPeriods} pay period${s.paidPeriods === 1 ? '' : 's'}` : '',
     ].filter(Boolean).join('\n'));
   } catch (err) {
     console.error('[Leaderboard] Stats failed:', err.response?.data?.error || err.message);

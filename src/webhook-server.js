@@ -63,10 +63,16 @@ function start() {
           res.end(JSON.stringify({ error: 'threadId is required' }));
           return;
         }
+        if (req.url === '/qa-check') {
+          // Answered only once it is posted, so a check the bot could not post stays in the backend's outbox.
+          await qaCheck.postCheck(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
-        if (req.url === '/qa-check') await qaCheck.postCheck(body);
-        else await qaCheck.updateCheck(body);
+        await qaCheck.updateCheck(body);
         return;
       }
 

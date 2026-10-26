@@ -2,7 +2,7 @@ require('dotenv').config();
 const axios = require('axios');
 const { Client, GatewayIntentBits, Events, Partials, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const { handleNewPost, handleRetryButton } = require('./handler');
-const { logMessage, getAttachments } = require('./message-logger');
+const { logMessage, fromMessage } = require('./message-logger');
 const webhookServer = require('./webhook-server');
 const { handleImportMessage } = require('./import-handler');
 const { handleSyncReport } = require('./sync-report-command');
@@ -21,6 +21,8 @@ const devTags = require('./dev-tags');
 const assetPayouts = require('./asset-payouts');
 const { getCommandDefinitions: assetCommandDefs, handleAssets } = require('./assets-command');
 const robloxConvert = require('./roblox-convert');
+const forumSync = require('./forum-sync');
+const teamCommands = require('./team-commands');
 
 const CREDIT_ESCALATION_POLL_MS = 15 * 60 * 1000;
 
@@ -33,7 +35,9 @@ const client = new Client({
     GatewayIntentBits.GuildMessageTyping,
     GatewayIntentBits.DirectMessages, // the owner's private DMs with the bot (see personal.js)
   ],
-  partials: [Partials.Channel], // DM channels are not cached; without this their messages never arrive
+  // DM channels are not cached; without Channel their messages never arrive. Message lets an edit to a
+  // post's opening message arrive after a restart, when that message is no longer cached.
+  partials: [Partials.Channel, Partials.Message],
 });
 
 // Support multiple channels via CHANNEL_CONFIG JSON or fallback to individual env vars
@@ -88,6 +92,7 @@ async function registerCommands() {
       .setDescription('Add this thread to DevTrack if it was missed by automatic tracking')
       .toJSON(),
     ...creditCommandDefs(),
+    ...teamCommands.getCommandDefinitions(), // /team (split a report's pay), /leaderboard (your own stats)
     ...assetCommandDefs(), // empty unless ASSETS_ENABLED=true
     ...qaCheck.getCommandDefinitions(), // /qadelay: how long before an unanswered QA check goes to QA Requests (admins)
     ...personal.getCommandDefinitions(), // /ask /note /remind, owner only, usable anywhere; empty unless PERSONAL_OWNER_DISCORD_ID is set
@@ -126,6 +131,8 @@ client.once(Events.ClientReady, async (c) => {
   assetStatus.start(client, assetAgent.allowedIds); // no-op unless ASSET_STATUS_POSTS=true
   // Dev-name tags (Ricky, Bryan, ...) on every post in the report forums.
   devTags.syncAll(client, Object.keys(WATCHED_CHANNELS).filter(id => WATCHED_CHANNELS[id] !== 'import'));
+  // Posts, replies and titles missed while the bot was down; every 10 minutes (FORUM_SYNC_MINUTES).
+  forumSync.start({ client, WATCHED_CHANNELS, threadReportMap, handleNewPost });
 
   escalateStaleCreditRequests(client).catch(err => console.error('[CreditEscalation] Initial poll failed:', err.message));
   setInterval(() => {
@@ -181,6 +188,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  if (interaction.commandName === 'team') {
+    await teamCommands.handleTeam(interaction, WATCHED_CHANNELS);
+    return;
+  }
+
+  if (interaction.commandName === 'leaderboard') {
+    await teamCommands.handleLeaderboard(interaction);
+    return;
+  }
+
   if (interaction.commandName === 'assets') {
     await handleAssets(interaction);
     return;
@@ -205,11 +222,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
  }
 });
 
-// A tester added or removed a dev-name tag on a report post.
+// A tester added or removed a dev-name tag on a report post. A rename is picked up by the forum sweep.
 client.on(Events.ThreadUpdate, (oldThread, newThread) => {
   const type = WATCHED_CHANNELS[newThread.parentId];
   if (!type || type === 'import') return;
   devTags.onThreadUpdate(oldThread, newThread);
+});
+
+// A report post was deleted: its report stays, and a QA check waiting in it is withdrawn.
+client.on(Events.ThreadDelete, (thread) => {
+  forumSync.onThreadDelete(thread, qaCheck.closeEscalation).catch(err => console.error('[ForumSync] onThreadDelete failed:', err.message));
+});
+
+// The opening message of a report post was edited.
+client.on(Events.MessageUpdate, (oldMessage, newMessage) => {
+  forumSync.onMessageUpdate(oldMessage, newMessage).catch(err => console.error('[ForumSync] onMessageUpdate failed:', err.message));
 });
 
 // New forum post created
@@ -339,15 +366,7 @@ client.on(Events.MessageCreate, async (message) => {
 
   console.log(`[MessageCreate] Logging reply from ${message.author.tag} in thread ${threadId}`);
 
-  await logMessage({
-    reportId,
-    content: message.content || '(attachment only)',
-    authorName: message.author.tag,
-    authorId: message.author.id,
-    authorAvatar: message.author.displayAvatarURL() || null,
-    attachments: getAttachments(message),
-    isBot: false,
-  });
+  await logMessage(fromMessage(message, reportId));
 });
 
 

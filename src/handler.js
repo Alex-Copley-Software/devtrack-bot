@@ -71,6 +71,8 @@ async function onSuccess({ reportId, thread, starterMessage, reportType }) {
     authorAvatar: starterMessage?.author?.displayAvatarURL?.() || null,
     attachments:  getAttachments(starterMessage),
     isBot:        false,
+    discordMessageId: starterMessage?.id || null,
+    sentAt:       starterMessage?.createdAt?.toISOString?.() || null,
   });
 
   const confirmMsg = await thread.send(

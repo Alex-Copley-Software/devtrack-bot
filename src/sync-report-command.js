@@ -2,13 +2,15 @@
 // /syncreport — run inside a forum thread that never got tracked (bot
 // downtime, channel added after the fact, etc). Creates a DevTrack report
 // from the thread's starter post and backfills its message history. If a
-// report already exists for the thread, just links it instead of
-// duplicating.
+// report already exists for the thread, links it and logs any replies it is
+// missing. The forum sweep (forum-sync.js) does both on its own every few
+// minutes, so this is rarely needed.
 
 const axios = require('axios');
 const tickets = require('./tickets');
 const FormData = require('form-data');
-const { logMessage, getAttachments } = require('./message-logger');
+const { logMessage, fromMessage } = require('./message-logger');
+const forumSync = require('./forum-sync');
 const { devTagsFor } = require('./dev-tags');
 
 const API_URL = process.env.API_URL || 'http://localhost:3001';
@@ -48,24 +50,6 @@ function dashboardLink(reportId) {
   return `${DASHBOARD}#report/${reportId}`;
 }
 
-// Fetch ALL messages in the thread oldest-first (handles pagination)
-async function fetchAllMessages(thread) {
-  const all = [];
-  let before = null;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const opts = { limit: 100 };
-    if (before) opts.before = before;
-    const batch = await thread.messages.fetch(opts);
-    if (!batch.size) break;
-    all.push(...batch.values());
-    before = batch.last()?.id;
-    if (batch.size < 100) break;
-    await new Promise(r => setTimeout(r, 300));
-  }
-  return all.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-}
-
 async function handleSyncReport(interaction, WATCHED_CHANNELS, threadReportMap) {
   const thread = interaction.channel;
 
@@ -92,8 +76,20 @@ async function handleSyncReport(interaction, WATCHED_CHANNELS, threadReportMap) 
   }
   if (report) {
     threadReportMap.set(thread.id, report.id);
+    // Catch up on replies it is missing, from the newest one it has.
+    let caughtUp = 0;
+    if (!isTicket) {
+      try {
+        const known = (await axios.post(`${API_URL}/api/bot/thread-sync`, { threads: [{ threadId: thread.id, title: thread.name }] }, {
+          headers: { 'x-bot-secret': BOT_SECRET }, timeout: 15000,
+        })).data.reports[thread.id];
+        if (known?.lastMessageId) caughtUp = await forumSync.backfill(thread, report.id, known.lastMessageId);
+      } catch (err) {
+        console.error('[SyncReport] Could not catch up on replies:', err.response?.data || err.message);
+      }
+    }
     return interaction.editReply({
-      content: `🔗 **This thread is already tracked in DevTrack.**\n${dashboardLink(report.id)}`,
+      content: `🔗 **This thread is already tracked in DevTrack.**${caughtUp ? ` ${caughtUp} missed message${caughtUp === 1 ? '' : 's'} logged.` : ''}\n${dashboardLink(report.id)}`,
     });
   }
 
@@ -166,35 +162,11 @@ async function handleSyncReport(interaction, WATCHED_CHANNELS, threadReportMap) 
   threadReportMap.set(thread.id, reportId);
 
   // ── 3. Log starter post + backfill any replies ─────────────────────────────
-  await logMessage({
-    reportId,
-    content: starterMessage.content || '(No description provided)',
-    authorName: starterMessage.author?.tag || 'unknown',
-    authorId: starterMessage.author?.id || '',
-    authorAvatar: starterMessage.author?.displayAvatarURL?.() || null,
-    attachments: getAttachments(starterMessage),
-    isBot: false,
-  });
+  await logMessage(fromMessage(starterMessage, reportId, '(No description provided)'));
 
   let logged = 1;
   try {
-    const allMessages = await fetchAllMessages(thread);
-    for (const msg of allMessages) {
-      if (msg.id === starterMessage.id) continue;
-      if (msg.author?.bot) continue;
-      if (!msg.content && !msg.attachments?.size) continue;
-      await logMessage({
-        reportId,
-        content: msg.content || '(attachment only)',
-        authorName: msg.author?.tag || 'unknown',
-        authorId: msg.author?.id || '',
-        authorAvatar: msg.author?.displayAvatarURL?.() || null,
-        attachments: getAttachments(msg),
-        isBot: false,
-      });
-      logged++;
-      await new Promise(r => setTimeout(r, 150));
-    }
+    logged += await forumSync.backfill(thread, reportId, starterMessage.id);
   } catch (err) {
     console.error('[SyncReport] Failed to backfill messages:', err.message);
   }

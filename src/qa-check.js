@@ -294,6 +294,13 @@ async function handleTake(interaction) {
     const thread = await client.channels.fetch(check.threadId).catch(() => null);
     await thread?.send({ content: `🙋 <@${interaction.user.id}> has taken this QA check from QA Requests. Only they can answer it until <t:${until}:t>.`, allowedMentions: { parse: [] } }).catch(() => {});
   } catch (err) {
+    // Already over: take its post off QA Requests and retire its buttons.
+    const check = err.response?.status === 409 ? await api('get', `/qa-check/${checkId}`).then(r => r.check, () => null) : null;
+    if (check && check.status !== 'pending') {
+      const line = await tidyFinished(check);
+      await interaction.editReply({ content: `This check is already done: ${line}`, allowedMentions: { parse: [] } });
+      return true;
+    }
     await interaction.editReply(errorText(err));
   }
   return true;
@@ -331,6 +338,31 @@ async function submit(interaction, checkId, verdict, note) {
 
 const errorText = err => err.response?.data?.error || 'Something went wrong. Try again in a moment.';
 
+// How a check ended, as said on its messages.
+function outcomeLine(check) {
+  const who = check.answeredByDiscordUserId ? `<@${check.answeredByDiscordUserId}>` : (check.answeredBy || 'the tester');
+  if (check.status === 'fixed') return `✅ **Confirmed fixed** by ${who}.`;
+  if (check.status === 'not_fixed') return `❌ **Not fixed**, according to ${who}. Sent back to the dev.${check.note ? `\n> ${check.note.replace(/\s+/g, ' ').slice(0, 500)}` : ''}`;
+  if (check.status === 'staff_approved') return `✅ **Approved by staff**${check.resolvedByName ? ` (${check.resolvedByName})` : ''}. No check needed.`;
+  return `↩️ **This check was withdrawn**${check.resolvedByName ? ` (${check.resolvedByName})` : ''}.`;
+}
+
+// A check that is over but still shows its buttons, because the answer was
+// saved and then something failed before the messages were updated: show how
+// it ended and retire the buttons, here and in QA Requests, so nobody is
+// left pressing buttons that can only refuse them.
+async function tidyFinished(check, message) {
+  const line = outcomeLine(check);
+  let target = message;
+  if (!target && check.threadId && check.messageId) {
+    const thread = await client.channels.fetch(check.threadId).catch(() => null);
+    target = await thread?.messages.fetch(check.messageId).catch(() => null);
+  }
+  if (target?.components?.length) await target.edit({ content: `${target.content}\n\n${line}`, components: [], allowedMentions: { parse: [] } }).catch(() => {});
+  await closeEscalation(check, line);
+  return line;
+}
+
 async function handleButton(interaction) {
   if (!interaction.isButton()) return false;
   if (interaction.customId?.startsWith('qa_take:')) return handleTake(interaction);
@@ -340,6 +372,11 @@ async function handleButton(interaction) {
   // Anyone can talk in a forum post, so the buttons answer only the tester who filed the report, or, once
   // it is open in QA Requests, whoever holds it there. Best effort, like the proof check below: the backend refuses anyone else as well.
   const { check, settings, refusal } = await api('get', `/qa-check/${checkId}?discordUserId=${interaction.user.id}`).catch(() => ({}));
+  if (check && check.status !== 'pending') {
+    const line = await tidyFinished(check, interaction.message);
+    await interaction.reply({ content: `This check is already done: ${line}`, ephemeral: true, allowedMentions: { parse: [] } });
+    return true;
+  }
   if (refusal) {
     const where = check.escalationChannelId ? ` (<#${check.escalationChannelId}>)` : '';
     await interaction.reply({ content: refusal.replace('QA Requests', `QA Requests${where}`), ephemeral: true, allowedMentions: { parse: [] } });

@@ -13,11 +13,12 @@ const tickets = require('./tickets');
 const API_URL    = process.env.API_URL    || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
 
-const api = (method, path, data) => axios({
+const api = (method, path, data, timeout = 15000) => axios({
   method, url: `${API_URL}/api/bot${path}`, data,
-  headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET }, timeout: 15000,
+  headers: { 'Content-Type': 'application/json', 'x-bot-secret': BOT_SECRET }, timeout,
 }).then(r => r.data);
-const errorText = err => err.response?.data?.error || 'Something went wrong. Try again in a moment.';
+const errorText = err => err.response?.data?.error
+  || (err.code === 'ECONNABORTED' ? 'DevTrack took too long to answer. Try again in a minute.' : 'Something went wrong. Try again in a moment.');
 
 function getCommandDefinitions() {
   return [
@@ -93,7 +94,7 @@ const LEVELS = [['major', 'Major'], ['moderate', 'Moderate'], ['minor', 'Minor']
 async function handleLeaderboard(interaction) {
   await interaction.deferReply({ ephemeral: true });
   try {
-    const s = await api('get', `/tester-stats/${interaction.user.id}`);
+    const s = await api('get', `/tester-stats/${interaction.user.id}`, undefined, 60000); // works out pay over all time
     const cash = n => `${s.currency}${Number(n || 0).toFixed(2)}`;
     const levels = LEVELS.filter(([k]) => s.levels[k]).map(([k, name]) => `${name} ${s.levels[k]}`).join(' · ');
     const extras = [
@@ -113,6 +114,7 @@ async function handleLeaderboard(interaction) {
       s.sinceLastPaid ? `> ⏳ **Since ${s.sinceLastPaid.from}** (after the last paid period): ${cash(s.sinceLastPaid.amount)}` : '',
     ].filter(Boolean).join('\n'));
   } catch (err) {
+    console.error('[Leaderboard] Stats failed:', err.response?.data?.error || err.message);
     await interaction.editReply(`❌ ${errorText(err)}`);
   }
 }

@@ -106,7 +106,7 @@ async function handleLeaderboard(interaction) {
     ].filter(Boolean).join(' · ');
     const range = s.period
       ? `**${s.period.name}** (${day(s.period.startsOn)} to ${day(s.period.endsOn)})${s.period.paid ? ', paid' : ''}`
-      : s.from ? `**since ${day(s.from)}** (no pay period covers today yet)` : '**all time** (no pay periods set up yet)';
+      : s.from ? `**since ${day(s.from)}**, when the last pay period ended (no pay period is set up for today yet)` : '**all time** (no pay periods set up yet)';
     await interaction.editReply([
       `📊 **Your DevTrack stats:** ${range}`,
       s.rank ? `> 🏆 **#${s.rank}** of ${s.testers} testers by accepted reports` : '> 🏆 Not ranked: none of your reports have been accepted in this period.',

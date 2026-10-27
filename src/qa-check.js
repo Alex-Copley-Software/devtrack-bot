@@ -19,6 +19,8 @@
 //   tester  -> Fixed / Not fixed       forwarded to POST /api/bot/qa-check/:id/respond
 //   anyone  -> Take this check         forwarded to POST /api/bot/qa-check/:id/take
 //   admins  -> /qadelay [minutes]      shows or sets the wait, POST /api/bot/qa-escalation
+//   mods    -> /qaswitch to|free       hands the check in this post to someone else, or takes it
+//                                      off whoever has it, POST /api/bot/qa-check-by-thread/:id/switch
 
 const axios = require('axios');
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, PermissionFlagsBits, SlashCommandBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
@@ -140,27 +142,33 @@ function qaRequestsChannel(guild) {
 
 const missingChannelLogged = new Set();
 
-// Checks the tester has left unanswered are posted in QA Requests, once each.
-async function escalate(check, minutes) {
-  const thread = await client.channels.fetch(check.threadId).catch(() => null);
-  if (!thread?.isThread?.()) return;
+// Posts a check in QA Requests and records the post. Returns the channel, or
+// null if the server has none.
+async function postRequest(thread, check, lines) {
   const target = qaRequestsChannel(thread.guild);
   if (!target) {
     if (!missingChannelLogged.has(thread.guild.id)) console.error(`[QaCheck] No QA Requests channel in ${thread.guild.name}; set QA_REQUESTS_CHANNEL_ID or make a channel called qa-requests`);
     missingChannelLogged.add(thread.guild.id);
-    return;
+    return null;
   }
-  const checkUrl = messageUrl(thread.guild.id, thread.id, check.messageId);
   const sent = await target.send({
-    content: [
-      `🧪 **QA check needed:** ${String(check.title || thread.name).slice(0, 200)}`,
-      `> The tester who filed this was asked to check the fix over ${minutesText(minutes)} ago and has not answered, so anyone can.`,
-      TAKE_LINE,
-    ].join('\n'),
-    components: [takeButtons(check.id, checkUrl)],
+    content: [`🧪 **QA check needed:** ${String(check.title || thread.name).slice(0, 200)}`, ...lines].join('\n'),
+    components: [takeButtons(check.id, messageUrl(thread.guild.id, thread.id, check.messageId))],
     allowedMentions: { parse: [] },
   });
   await api('post', `/qa-check/${check.id}/escalated`, { channelId: target.id, messageId: sent.id });
+  return target;
+}
+
+// Checks the tester has left unanswered are posted in QA Requests, once each.
+async function escalate(check, minutes) {
+  const thread = await client.channels.fetch(check.threadId).catch(() => null);
+  if (!thread?.isThread?.()) return;
+  const target = await postRequest(thread, check, [
+    `> The tester who filed this was asked to check the fix over ${minutesText(minutes)} ago and has not answered, so anyone can.`,
+    TAKE_LINE,
+  ]);
+  if (!target) return;
   const message = await thread.messages.fetch(check.messageId).catch(() => null);
   if (message) {
     await message.edit({ content: `${message.content}\n\n⏰ **Not checked after ${minutesText(minutes)}**, so it is open in <#${target.id}>. Only whoever takes it there can answer now; <@${check.discordUserId}> can take it too.`, allowedMentions: { parse: [] } }).catch(() => {});
@@ -225,7 +233,18 @@ async function tidyReleased(check) {
   }
 }
 
-// ── /qadelay ──────────────────────────────────────────────────────────────────
+// Its QA Requests message with the line saying who has it (or that nobody
+// does) swapped for a new one.
+async function setHolderLine(check, line) {
+  if (!check.escalationChannelId || !check.escalationMessageId) return;
+  const channel = await client.channels.fetch(check.escalationChannelId).catch(() => null);
+  const message = await channel?.messages.fetch(check.escalationMessageId).catch(() => null);
+  if (!message) return;
+  const lines = message.content.split('\n').filter(l => !l.startsWith('🙋') && !l.startsWith('🔄'));
+  await message.edit({ content: [...lines, line].join('\n'), allowedMentions: { parse: [] } }).catch(() => {});
+}
+
+// ── /qadelay, /qaswitch ───────────────────────────────────────────────────────
 
 function getCommandDefinitions() {
   return [new SlashCommandBuilder()
@@ -235,10 +254,19 @@ function getCommandDefinitions() {
       .setDescription('New wait in minutes (0 = never send checks to QA Requests). Leave out to see the current one.')
       .setMinValue(0).setMaxValue(24 * 60))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('qaswitch')
+    .setDescription('Change who is checking the fix on this report')
+    .addSubcommand(s => s.setName('to').setDescription('Hand this report\'s QA check to someone else')
+      .addUserOption(o => o.setName('user').setDescription('Who checks it now').setRequired(true)))
+    .addSubcommand(s => s.setName('free').setDescription('Take this report\'s QA check off whoever has it, so anyone can take it'))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageThreads)
     .toJSON()];
 }
 
 async function handleCommand(interaction) {
+  if (interaction.commandName === 'qaswitch') return handleSwitch(interaction);
   if (interaction.commandName !== 'qadelay') return false;
   // Hidden from everyone but admins; checked again here in case a server override shows it to others.
   if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
@@ -261,6 +289,62 @@ async function handleCommand(interaction) {
       : `✅ QA checks are no longer sent to QA Requests (was ${minutesText(before)}). Ones already there stay open.`);
   } catch (err) {
     await interaction.editReply(errorText(err));
+  }
+  return true;
+}
+
+// A moderator hands the QA check in this post to someone else, or takes it
+// off whoever has it. The new holder has it for the usual 30 minutes, as if
+// they had pressed Take this check; one that was still with the reporter is
+// posted in QA Requests at the same time, so it can be taken from there later.
+async function handleSwitch(interaction) {
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageThreads)) {
+    await interaction.reply({ content: 'Only moderators can change who is checking a fix.', ephemeral: true });
+    return true;
+  }
+  const thread = interaction.channel;
+  if (!thread?.isThread?.()) {
+    await interaction.reply({ content: '❌ Use `/qaswitch` inside the bug report post whose check you want to change.', ephemeral: true });
+    return true;
+  }
+  const target = interaction.options.getSubcommand() === 'to' ? interaction.options.getUser('user') : null;
+  if (target?.bot) {
+    await interaction.reply({ content: '❌ A bot cannot check a fix.', ephemeral: true });
+    return true;
+  }
+  await interaction.deferReply({ ephemeral: true });
+  try {
+    const actorName = interaction.member?.displayName || interaction.user.username;
+    const { check, previous, takeMinutes } = await api('post', `/qa-check-by-thread/${thread.id}/switch`, {
+      discordUserId: target?.id, discordUserName: target && (interaction.options.getMember('user')?.displayName || target.username), actorName,
+    });
+    const checkUrl = messageUrl(thread.guild.id, thread.id, check.messageId);
+    const from = previous && previous.discordUserId !== target?.id ? ` from <@${previous.discordUserId}>` : '';
+    const told = [target?.id, previous?.discordUserId].filter(Boolean);
+
+    if (!target) {
+      await setHolderLine(check, '🔄 Free to take again.');
+      await thread.send({
+        content: `🔄 <@${interaction.user.id}> ${previous ? `took this QA check off <@${previous.discordUserId}>` : 'freed this QA check'}. `
+          + (check.escalatedAt ? 'Anyone can take it in QA Requests now.' : `<@${check.discordUserId}> can answer it again until it goes to QA Requests.`),
+        allowedMentions: { users: told },
+      }).catch(() => {});
+      await interaction.editReply('✅ Nobody has this check now.');
+      return true;
+    }
+
+    const until = Math.floor(new Date(check.takenAt).getTime() / 1000) + takeMinutes * 60;
+    const holderLine = `🙋 Being checked by <@${target.id}>, until <t:${until}:t>.`;
+    if (check.escalationMessageId) await setHolderLine(check, holderLine);
+    else await postRequest(thread, check, ['> Handed out by a moderator.', TAKE_LINE, holderLine]).catch(err => console.error(`[QaCheck] Could not post check ${check.id} in QA Requests:`, err.message));
+    await thread.send({
+      content: `🔀 <@${interaction.user.id}> handed this QA check${from} to <@${target.id}>. Only <@${target.id}> can answer it, until <t:${until}:t>: `
+        + `test the fix in game, post a video or photo here, then press **Fixed** or **Not fixed** on the check message: ${checkUrl}`,
+      allowedMentions: { users: told },
+    }).catch(() => {});
+    await interaction.editReply(`✅ Handed${from} to <@${target.id}>. They have it until <t:${until}:t>.`);
+  } catch (err) {
+    await interaction.editReply({ content: errorText(err), allowedMentions: { parse: [] } });
   }
   return true;
 }

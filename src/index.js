@@ -94,7 +94,7 @@ async function registerCommands() {
     ...creditCommandDefs(),
     ...teamCommands.getCommandDefinitions(), // /team (split a report's pay), /leaderboard (your own stats)
     ...assetCommandDefs(), // empty unless ASSETS_ENABLED=true
-    ...qaCheck.getCommandDefinitions(), // /qadelay: how long before an unanswered QA check goes to QA Requests (admins)
+    ...qaCheck.getCommandDefinitions(), // /qadelay (admins): how long before an unanswered QA check goes to QA Requests; /qaswitch (mods): change who is checking one
     ...personal.getCommandDefinitions(), // /ask /note /remind, owner only, usable anywhere; empty unless PERSONAL_OWNER_DISCORD_ID is set
     ...robloxConvert.getCommandDefinitions(), // right-click → Apps → Convert to Roblox (owner only)
   ];

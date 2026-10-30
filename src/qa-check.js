@@ -1,6 +1,7 @@
 // qa-check.js
 // Tester QA: when a report goes to QA Review, the tester who filed it is
-// pinged in the report's own thread and asked to confirm the fix. They post
+// pinged in the report's own thread and asked to confirm the fix. If someone
+// said Not fixed last time, they are asked instead (the backend picks who). They post
 // a video, then press Fixed or Not fixed; nobody else in the thread can. The
 // backend decides who may answer and records every check; this file is the
 // Discord side only.
@@ -61,7 +62,7 @@ function takeButtons(checkId, checkUrl) {
 
 // ── from the backend ──────────────────────────────────────────────────────────
 
-async function postCheck({ checkId, threadId, discordUserId, title, requireVideo, escalateMinutes }) {
+async function postCheck({ checkId, threadId, discordUserId, title, requireVideo, escalateMinutes, retest }) {
   if (!client) throw new Error('Bot is not ready yet');
   try {
     // A resend after a restart: skip it if the first try got through, or the check is over.
@@ -72,7 +73,9 @@ async function postCheck({ checkId, threadId, discordUserId, title, requireVideo
     const opensUp = thread.isThread?.() && escalateMinutes > 0;
     const sent = await thread.send({
       content: [
-        `<@${discordUserId}> 🧪 **A fix for your report is ready for you to check.**`,
+        retest
+          ? `<@${discordUserId}> 🧪 **A new fix is ready for you to check.** You found it still broken last time, so you are asked first.`
+          : `<@${discordUserId}> 🧪 **A fix for your report is ready for you to check.**`,
         title ? `> ${String(title).slice(0, 200)}` : '',
         `> Test it in game${requireVideo ? ', post a video or photo here showing the result,' : ''} then press a button below.`,
         `> **Fixed** if the bug is gone. **Not fixed** if it still happens.${requireVideo ? ' Either answer needs the video or photo first.' : ''}`,
@@ -165,7 +168,7 @@ async function escalate(check, minutes) {
   const thread = await client.channels.fetch(check.threadId).catch(() => null);
   if (!thread?.isThread?.()) return;
   const target = await postRequest(thread, check, [
-    `> The tester who filed this was asked to check the fix over ${minutesText(minutes)} ago and has not answered, so anyone can.`,
+    `> <@${check.discordUserId}> was asked to check the fix over ${minutesText(minutes)} ago and has not answered, so anyone can.`,
     TAKE_LINE,
   ]);
   if (!target) return;
@@ -280,7 +283,7 @@ async function handleCommand(interaction) {
       const current = (await api('get', '/qa-escalation')).minutes;
       await interaction.editReply(current
         ? `⏱️ QA checks go to QA Requests after **${minutesText(current)}** without an answer. \`/qadelay minutes:\` changes it.`
-        : '⏱️ QA checks are **not** sent to QA Requests; only the tester who filed the report can answer. `/qadelay minutes:` turns it back on.');
+        : '⏱️ QA checks are **not** sent to QA Requests; only the tester asked (the reporter, or whoever said Not fixed last time) can answer. `/qadelay minutes:` turns it back on.');
       return true;
     }
     const { before } = await api('post', '/qa-escalation', { minutes, changedBy: `${interaction.user.tag} (${interaction.user.id})` });
@@ -453,7 +456,7 @@ async function handleButton(interaction) {
   if (!interaction.customId?.startsWith('qa_check:')) return false;
   const [, verdict, checkId] = interaction.customId.split(':');
 
-  // Anyone can talk in a forum post, so the buttons answer only the tester who filed the report, or, once
+  // Anyone can talk in a forum post, so the buttons answer only the tester asked (the reporter, or whoever said Not fixed last time), or, once
   // it is open in QA Requests, whoever holds it there. Best effort, like the proof check below: the backend refuses anyone else as well.
   const { check, settings, refusal } = await api('get', `/qa-check/${checkId}?discordUserId=${interaction.user.id}`).catch(() => ({}));
   if (check && check.status !== 'pending') {

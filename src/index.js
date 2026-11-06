@@ -14,12 +14,8 @@ const {
   escalateStaleCreditRequests,
 } = require('./credit-commands');
 const reportPause = require('./report-pause');
-const assetAgent = require('./asset-agent');
-const assetStatus = require('./asset-status');
 const qaCheck = require('./qa-check');
 const devTags = require('./dev-tags');
-const assetPayouts = require('./asset-payouts');
-const { getCommandDefinitions: assetCommandDefs, handleAssets } = require('./assets-command');
 const robloxConvert = require('./roblox-convert');
 const forumSync = require('./forum-sync');
 const teamCommands = require('./team-commands');
@@ -93,7 +89,6 @@ async function registerCommands() {
       .toJSON(),
     ...creditCommandDefs(),
     ...teamCommands.getCommandDefinitions(), // /team (split a report's pay), /leaderboard (your own stats)
-    ...assetCommandDefs(), // empty unless ASSETS_ENABLED=true
     ...qaCheck.getCommandDefinitions(), // /qadelay (admins): how long before an unanswered QA check goes to QA Requests; /qaswitch (mods): change who is checking one
     ...personal.getCommandDefinitions(), // /ask /note /remind, owner only, usable anywhere; empty unless PERSONAL_OWNER_DISCORD_ID is set
     ...robloxConvert.getCommandDefinitions(), // right-click → Apps → Convert to Roblox (owner only)
@@ -127,8 +122,6 @@ client.once(Events.ClientReady, async (c) => {
   await reportPause.syncPauseState();
   personal.start(client); // no-op unless PERSONAL_OWNER_DISCORD_ID is set
   tickets.start(client, threadReportMap); // the remaining Ticket Tool tickets; off with TICKETS_ENABLED=false
-  assetAgent.start(client); // no-op unless ASSET_AGENT_ENABLED=true
-  assetStatus.start(client, assetAgent.allowedIds); // no-op unless ASSET_STATUS_POSTS=true
   // Dev-name tags (Ricky, Bryan, ...) on every post in the report forums.
   devTags.syncAll(client, Object.keys(WATCHED_CHANNELS).filter(id => WATCHED_CHANNELS[id] !== 'import'));
   // Posts, replies and titles missed while the bot was down; every 10 minutes (FORUM_SYNC_MINUTES).
@@ -143,11 +136,6 @@ client.once(Events.ClientReady, async (c) => {
 // Handle slash commands and button interactions
 client.on(Events.InteractionCreate, async (interaction) => {
  try {
-  if (interaction.isStringSelectMenu()) {
-    if (await assetPayouts.handleSelect(interaction)) return;
-    return;
-  }
-
   // Handle retry buttons from failed report submissions
   if (interaction.isButton()) {
     if (interaction.customId?.startsWith('retry_report:')) {
@@ -157,16 +145,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
     if (await handleCreditButton(interaction)) return;
-    if (await assetAgent.handleButton(interaction)) return;
     if (await qaCheck.handleButton(interaction)) return;
-    if (await assetPayouts.handleButton(interaction)) return;
     if (await robloxConvert.handleButton(interaction)) return;
     return;
   }
 
   if (interaction.isModalSubmit()) {
     if (await qaCheck.handleModal(interaction)) return;
-    if (await assetPayouts.handleModal(interaction)) return;
     if (await robloxConvert.handleModal(interaction)) return;
   }
 
@@ -195,11 +180,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.commandName === 'leaderboard') {
     await teamCommands.handleLeaderboard(interaction);
-    return;
-  }
-
-  if (interaction.commandName === 'assets') {
-    await handleAssets(interaction);
     return;
   }
 
@@ -329,8 +309,6 @@ client.on(Events.MessageCreate, async (message) => {
   }
   // A DM to the bot: answered for the owner, ignored for everyone else, and never treated as a report.
   try { if (await personal.onMessage(message)) return; } catch (err) { console.error('[Personal] onMessage failed:', err.message); return; }
-  // Asset agent ingest: only allowlisted channels, and it never throws.
-  try { assetAgent.onMessage(message); } catch (err) { console.error('[AssetAgent] onMessage failed:', err.message); }
   if (process.env.IMPORTS_CHANNEL_ID && message.channelId === process.env.IMPORTS_CHANNEL_ID) {
     if (!message.attachments?.size) return;
     try {

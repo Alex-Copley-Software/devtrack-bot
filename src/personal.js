@@ -11,7 +11,6 @@
 
 const axios = require('axios');
 const { ChannelType, MessageFlags } = require('discord.js');
-const assetAgent = require('./asset-agent');
 
 const API_URL = process.env.API_URL || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
@@ -43,7 +42,7 @@ const text = (name, description, required = true, max = 1500) => ({ type: 3, nam
 function getCommandDefinitions() {
   if (!OWNER) return [];
   return [
-    { name: 'ask', description: 'Private: ask your assistant (notes, reminders, assets, payments)', ...ANYWHERE,
+    { name: 'ask', description: 'Private: ask your assistant (notes, reminders)', ...ANYWHERE,
       options: [text('question', 'What you want to know or do'), { type: 5, name: 'share', description: 'Show the answer to everyone here (default: only you)', required: false }] },
     { name: 'note', description: 'Private: save a note only you can read back', ...ANYWHERE, options: [text('text', 'The note', true, 3500)] },
     { name: 'remind', description: 'Private: set a reminder, sent to you as a DM', ...ANYWHERE,
@@ -66,7 +65,10 @@ async function askAssistant(content, { id, channelId, guildId, authorName, attac
   return result;
 }
 
-const cards = result => (result.proposals || []).map(s => ({ embeds: [assetAgent.suggestionEmbed(s)], components: [assetAgent.suggestionButtons(s)], allowedMentions: { parse: [] } }));
+// The bot no longer changes the asset tracker or logs payments from Discord.
+// If the assistant proposes either, say where to do it instead of posting a card.
+const NOT_HERE = 'Asset and payment changes are not made from Discord any more. Do it on the Assets or Revenue page.';
+const withNotHere = result => (result.proposals?.length ? `${result.reply || ''}\n\n-# ${NOT_HERE}`.trim() : result.reply);
 
 async function handleCommand(interaction) {
   if (!interaction.isChatInputCommand() || !COMMANDS.has(interaction.commandName)) return false;
@@ -91,9 +93,7 @@ async function handleCommand(interaction) {
       id: interaction.id, channelId: interaction.channelId, guildId: interaction.guildId,
       authorName: interaction.user.globalName || interaction.user.username,
     });
-    await interaction.editReply({ content: result.reply || 'Done.', allowedMentions: { parse: [] }, flags: MessageFlags.SuppressEmbeds });
-    // Anything that changes the tracker or logs money still waits on a card. Only the owner can press it.
-    for (const card of cards(result)) await interaction.followUp({ ...card, flags });
+    await interaction.editReply({ content: withNotHere(result) || 'Done.', allowedMentions: { parse: [] }, flags: MessageFlags.SuppressEmbeds });
   } catch (err) {
     console.error(`[Personal] /${name} failed:`, err.response?.data?.error || err.message);
     await interaction.editReply(errorText(err)).catch(() => {});
@@ -117,8 +117,8 @@ async function onMessage(message) {
       authorName: message.author.globalName || message.author.username,
       attachments: [...message.attachments.values()].map(a => ({ name: a.name, url: a.url, contentType: a.contentType || null })),
     });
-    if (result.reply) await message.reply({ content: result.reply, allowedMentions: { parse: [], repliedUser: false }, flags: MessageFlags.SuppressEmbeds });
-    for (const card of cards(result)) await message.channel.send(card);
+    const reply = withNotHere(result);
+    if (reply) await message.reply({ content: reply, allowedMentions: { parse: [], repliedUser: false }, flags: MessageFlags.SuppressEmbeds });
   } catch (err) {
     console.error('[Personal] DM failed:', err.response?.data?.error || err.message);
     await message.reply({ content: errorText(err), allowedMentions: { parse: [], repliedUser: false } }).catch(() => {});

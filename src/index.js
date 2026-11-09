@@ -19,6 +19,7 @@ const devTags = require('./dev-tags');
 const robloxConvert = require('./roblox-convert');
 const linear = require('./linear');
 const linearStatus = require('./linear-status');
+const modelViewer = require('./model-viewer');
 const forumSync = require('./forum-sync');
 const teamCommands = require('./team-commands');
 
@@ -94,6 +95,7 @@ async function registerCommands() {
     ...qaCheck.getCommandDefinitions(), // /qadelay (admins): how long before an unanswered QA check goes to QA Requests; /qaswitch (mods): change who is checking one
     ...personal.getCommandDefinitions(), // /ask /note /remind, owner only, usable anywhere; empty unless PERSONAL_OWNER_DISCORD_ID is set
     ...robloxConvert.getCommandDefinitions(), // right-click → Apps → Convert to Roblox (owner only)
+    ...modelViewer.getCommandDefinitions(), // right-click → Open in Model Viewer: a .blend to the Models page (admins; owner in DMs)
     ...linear.getCommandDefinitions(), // right-click → Send to Linear / Give Linear Task, and /linear's menu (admins; owner in DMs); empty unless LINEAR_API_KEY is set
   ];
 
@@ -168,6 +170,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (await robloxConvert.handleContextMenu(interaction)) return;
   if (await linear.handleContextMenu(interaction)) return;
+  if (await modelViewer.handleContextMenu(interaction)) return;
 
   if (!interaction.isChatInputCommand()) return;
 

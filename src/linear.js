@@ -6,8 +6,10 @@
 //     message, and the issue moves to Done
 //   right-click a dev's message → Apps → "Give Linear Task"
 //     puts the dev's name on the end of an issue's title ("Aura - Bryan")
-//   /linear give-task user issue [name]     the same, picking the dev and searching the issue as you type
-//   /linear remove-task issue               takes the name back off
+//   /linear      a private message with buttons, each opening a form:
+//                  Give task     pick the dev, the issue, and (optionally) the name to show
+//                  Remove task   takes the name back off an issue
+//                  Send files    upload files from your computer onto an issue, and it moves to Done
 //
 // Finding the issue: its ID (ASS-12, or 12) or words from its title or its
 // parent's ("doumo aura"). One match goes straight through; several give a list.
@@ -23,6 +25,7 @@ const axios = require('axios');
 const {
   ContextMenuCommandBuilder, ApplicationCommandType, PermissionFlagsBits, MessageFlags, SlashCommandBuilder,
   ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, StringSelectMenuBuilder,
+  ButtonBuilder, ButtonStyle, LabelBuilder, UserSelectMenuBuilder, FileUploadBuilder,
 } = require('discord.js');
 
 const KEY = process.env.LINEAR_API_KEY;
@@ -34,6 +37,8 @@ const SEND = 'Send to Linear';
 const GIVE = 'Give Linear Task';
 const MODAL = 'linear-form';
 const PICK = 'linear-pick';
+const MENU = 'linear-menu';       // the buttons /linear posts
+const MENU_FORM = 'linear-menu-form';
 // integration_types 0 and 1: installed to a server or to a user's account.
 // contexts 0, 1, 2: usable in servers, in the bot's own DM, and in other DMs and group chats.
 const ANYWHERE = { integration_types: [0, 1], contexts: [0, 1, 2] };
@@ -122,7 +127,7 @@ async function send(job, issue) {
   const uploaded = [];
   for (const file of job.files) uploaded.push(await upload(file));
   const lines = uploaded.map(f => (/^image\//.test(f.contentType || '') ? `![${f.name}](${f.assetUrl})` : `[${f.name}](${f.assetUrl})`));
-  await comment(issue.id, [`**Delivered** by ${job.by} in Discord: [message](${job.link})`, job.note ? `\n${job.note}` : '', '', ...lines].join('\n'));
+  await comment(issue.id, [`**Delivered** by ${job.by} in Discord${job.link ? `: [message](${job.link})` : ''}`, job.note ? `\n${job.note}` : '', '', ...lines].join('\n'));
   let moved = false;
   if (t.done && issue.state?.type !== 'completed') {
     await updateIssue(issue.id, { stateId: t.done.id });
@@ -131,7 +136,7 @@ async function send(job, issue) {
   const text = `✅ Sent ${uploaded.length} file${uploaded.length === 1 ? '' : 's'} to [${issue.identifier}: ${issue.title}](<${issue.url}>)` +
     (moved ? ` and moved it to ${t.done.name}.` : t.done ? ` (it was already ${issue.state.name}).` : '. This team has no Done state, so it was left as it is.');
   // Only works where the bot is in the channel; elsewhere the reply is enough.
-  await job.message.react('✅').catch(() => {});
+  await job.message?.react('✅').catch(() => {});
   return text;
 }
 
@@ -194,14 +199,8 @@ function getCommandDefinitions() {
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator).toJSON(),
     ...ANYWHERE,
   });
-  const slash = new SlashCommandBuilder().setName('linear').setDescription(`The Linear ${TEAM} team`)
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addSubcommand(s => s.setName('give-task').setDescription("Put a dev's name on the end of an issue")
-      .addUserOption(o => o.setName('user').setDescription('The dev').setRequired(true))
-      .addStringOption(o => o.setName('issue').setDescription('Type to search: ID, or words from the title').setRequired(true).setAutocomplete(true))
-      .addStringOption(o => o.setName('name').setDescription('Name to show (default: the one used last time, or their server name)').setMaxLength(40)))
-    .addSubcommand(s => s.setName('remove-task').setDescription("Take the dev's name back off an issue")
-      .addStringOption(o => o.setName('issue').setDescription('Type to search: ID, or words from the title').setRequired(true).setAutocomplete(true)));
+  const slash = new SlashCommandBuilder().setName('linear').setDescription(`Linear ${TEAM}: give or remove a task, or send files`)
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
   return [menu(SEND), menu(GIVE), { ...slash.toJSON(), ...ANYWHERE }];
 }
 
@@ -284,6 +283,10 @@ async function resolve(interaction, key, text) {
 }
 
 async function handleModal(interaction) {
+  if (interaction.customId?.startsWith(`${MENU_FORM}:`)) {
+    if (!allowed(interaction)) return nope(interaction);
+    return handleMenuForm(interaction);
+  }
   if (!interaction.customId?.startsWith(`${MODAL}:`)) return false;
   if (!allowed(interaction)) return nope(interaction);
   const key = interaction.customId.slice(MODAL.length + 1);
@@ -310,35 +313,73 @@ async function handleSelect(interaction) {
   return true;
 }
 
-// /linear give-task and remove-task.
+// /linear: a private message with a button per job.
 async function handleCommand(interaction) {
   if (!KEY || !interaction.isChatInputCommand() || interaction.commandName !== 'linear') return false;
   if (!allowed(interaction)) return nope(interaction);
+  await interaction.reply({
+    content: `**Linear · ${TEAM}**: what do you want to do?`,
+    flags: MessageFlags.Ephemeral,
+    components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${MENU}:give`).setLabel('Give task').setEmoji('🧑‍💻').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${MENU}:remove`).setLabel('Remove task').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${MENU}:send`).setLabel('Send files').setEmoji('📎').setStyle(ButtonStyle.Secondary),
+    )],
+  });
+  return true;
+}
+
+const issueField = () => new LabelBuilder().setLabel(`${TEAM} issue`).setDescription('Its ID, or words from its title or its parent\'s')
+  .setTextInputComponent(new TextInputBuilder().setCustomId('issue').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)
+    .setPlaceholder(`${team ? team.key : 'ASS'}-12, or "doumo aura"`));
+
+const MENU_FORMS = {
+  give: () => new ModalBuilder().setCustomId(`${MENU_FORM}:give`).setTitle('Give a task').addLabelComponents(
+    new LabelBuilder().setLabel('Dev').setUserSelectMenuComponent(new UserSelectMenuBuilder().setCustomId('dev').setRequired(true).setMaxValues(1)),
+    issueField(),
+    new LabelBuilder().setLabel('Name on the issue (optional)').setDescription('Blank: the name used last time, or their server name')
+      .setTextInputComponent(new TextInputBuilder().setCustomId('name').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(40)),
+  ),
+  remove: () => new ModalBuilder().setCustomId(`${MENU_FORM}:remove`).setTitle('Remove a task').addLabelComponents(issueField()),
+  send: () => new ModalBuilder().setCustomId(`${MENU_FORM}:send`).setTitle('Send files to Linear').addLabelComponents(
+    new LabelBuilder().setLabel('Files').setDescription('Up to 10. The issue moves to Done.')
+      .setFileUploadComponent(new FileUploadBuilder().setCustomId('files').setRequired(true).setMinValues(1).setMaxValues(10)),
+    issueField(),
+    new LabelBuilder().setLabel('Note for the comment (optional)')
+      .setTextInputComponent(new TextInputBuilder().setCustomId('note').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(1000)),
+  ),
+};
+
+// A button on /linear's message opens its form.
+async function handleButton(interaction) {
+  if (!interaction.customId?.startsWith(`${MENU}:`)) return false;
+  if (!allowed(interaction)) return nope(interaction);
+  const make = MENU_FORMS[interaction.customId.slice(MENU.length + 1)];
+  if (!make) return false;
+  await interaction.showModal(make());
+  return true;
+}
+
+// A form from /linear's buttons.
+async function handleMenuForm(interaction) {
+  const action = interaction.customId.slice(MENU_FORM.length + 1);
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const issue = interaction.options.getString('issue', true);
-  if (interaction.options.getSubcommand() === 'remove-task') {
+  const issue = interaction.fields.getTextInputValue('issue');
+  if (action === 'remove') {
     await resolve(interaction, hold({ action: 'remove', by: by(interaction) }), issue);
-    return true;
-  }
-  const user = interaction.options.getUser('user', true);
-  const typed = cleanName(interaction.options.getString('name'));
-  const name = typed || cleanName(await nameFor(user, interaction.options.getMember('user')));
-  await resolve(interaction, hold({ action: 'give', devId: user.id, name, by: by(interaction) }), issue);
-  return true;
-}
-
-// The issue list as you type in /linear: up to 25 matches, newest first.
-async function handleAutocomplete(interaction) {
-  if (!KEY || !interaction.isAutocomplete() || interaction.commandName !== 'linear') return false;
-  if (!allowed(interaction)) { await interaction.respond([]).catch(() => {}); return true; }
-  try {
-    const found = await findIssues(interaction.options.getFocused(), 25);
-    await interaction.respond(found.slice(0, 25).map(i => ({ name: [`${i.identifier}: ${i.title}`, context(i)].filter(Boolean).join(' · ').slice(0, 100), value: i.id })));
-  } catch (err) {
-    console.error('[Linear] autocomplete failed:', err.message);
-    await interaction.respond([]).catch(() => {});
+  } else if (action === 'give') {
+    const user = interaction.fields.getSelectedUsers('dev')?.first();
+    if (!user) { await interaction.editReply('❌ Pick the dev.'); return true; }
+    const member = interaction.fields.getSelectedMembers('dev')?.first();
+    const name = cleanName(interaction.fields.getTextInputValue('name')) || cleanName(await nameFor(user, member));
+    await resolve(interaction, hold({ action: 'give', devId: user.id, name, by: by(interaction) }), issue);
+  } else if (action === 'send') {
+    const files = [...(interaction.fields.getUploadedFiles('files')?.values() || [])].slice(0, 10)
+      .map(a => ({ name: a.name, url: a.url, contentType: a.contentType || null }));
+    if (!files.length) { await interaction.editReply('❌ Add at least one file.'); return true; }
+    await resolve(interaction, hold({ action: 'send', files, note: interaction.fields.getTextInputValue('note').trim(), by: by(interaction) }), issue);
   }
   return true;
 }
 
-module.exports = { getCommandDefinitions, handleContextMenu, handleModal, handleSelect, handleCommand, handleAutocomplete };
+module.exports = { getCommandDefinitions, handleContextMenu, handleModal, handleSelect, handleCommand, handleButton };

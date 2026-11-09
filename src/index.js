@@ -93,7 +93,7 @@ async function registerCommands() {
     ...qaCheck.getCommandDefinitions(), // /qadelay (admins): how long before an unanswered QA check goes to QA Requests; /qaswitch (mods): change who is checking one
     ...personal.getCommandDefinitions(), // /ask /note /remind, owner only, usable anywhere; empty unless PERSONAL_OWNER_DISCORD_ID is set
     ...robloxConvert.getCommandDefinitions(), // right-click → Apps → Convert to Roblox (owner only)
-    ...linear.getCommandDefinitions(), // right-click → Send to Linear / Give Linear Task, and /linear (admins; owner in DMs); empty unless LINEAR_API_KEY is set
+    ...linear.getCommandDefinitions(), // right-click → Send to Linear / Give Linear Task, and /linear's menu (admins; owner in DMs); empty unless LINEAR_API_KEY is set
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -138,11 +138,6 @@ client.once(Events.ClientReady, async (c) => {
 // Handle slash commands and button interactions
 client.on(Events.InteractionCreate, async (interaction) => {
  try {
-  if (interaction.isAutocomplete()) {
-    await linear.handleAutocomplete(interaction);
-    return;
-  }
-
   if (interaction.isStringSelectMenu()) {
     if (await linear.handleSelect(interaction)) return;
     return;
@@ -159,6 +154,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (await handleCreditButton(interaction)) return;
     if (await qaCheck.handleButton(interaction)) return;
     if (await robloxConvert.handleButton(interaction)) return;
+    if (await linear.handleButton(interaction)) return;
     return;
   }
 

@@ -17,6 +17,7 @@ const reportPause = require('./report-pause');
 const qaCheck = require('./qa-check');
 const devTags = require('./dev-tags');
 const robloxConvert = require('./roblox-convert');
+const linear = require('./linear');
 const forumSync = require('./forum-sync');
 const teamCommands = require('./team-commands');
 
@@ -92,6 +93,7 @@ async function registerCommands() {
     ...qaCheck.getCommandDefinitions(), // /qadelay (admins): how long before an unanswered QA check goes to QA Requests; /qaswitch (mods): change who is checking one
     ...personal.getCommandDefinitions(), // /ask /note /remind, owner only, usable anywhere; empty unless PERSONAL_OWNER_DISCORD_ID is set
     ...robloxConvert.getCommandDefinitions(), // right-click → Apps → Convert to Roblox (owner only)
+    ...linear.getCommandDefinitions(), // right-click → Apps → Send to Linear (admins; owner in DMs); empty unless LINEAR_API_KEY is set
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -136,6 +138,11 @@ client.once(Events.ClientReady, async (c) => {
 // Handle slash commands and button interactions
 client.on(Events.InteractionCreate, async (interaction) => {
  try {
+  if (interaction.isStringSelectMenu()) {
+    if (await linear.handleSelect(interaction)) return;
+    return;
+  }
+
   // Handle retry buttons from failed report submissions
   if (interaction.isButton()) {
     if (interaction.customId?.startsWith('retry_report:')) {
@@ -153,9 +160,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit()) {
     if (await qaCheck.handleModal(interaction)) return;
     if (await robloxConvert.handleModal(interaction)) return;
+    if (await linear.handleModal(interaction)) return;
   }
 
   if (await robloxConvert.handleContextMenu(interaction)) return;
+  if (await linear.handleContextMenu(interaction)) return;
 
   if (!interaction.isChatInputCommand()) return;
 

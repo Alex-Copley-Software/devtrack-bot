@@ -3,7 +3,7 @@
 // an issue in the Linear "Assets" team, as a comment with the files and a link
 // back to the message, and the issue moves to Done.
 //
-//   right-click → Send to Linear → type the issue (AST-12, or words from its title)
+//   right-click → Send to Linear → type the issue (ASS-12, or words from its title)
 //     -> one match: sent straight away
 //     -> several: pick one from a list
 //
@@ -53,7 +53,7 @@ async function assetsTeam() {
   return team;
 }
 
-const ISSUE = 'id identifier title url state { name type } team { id }';
+const ISSUE = 'id identifier title url state { name type } team { id } parent { identifier title } project { name }';
 
 // "AST-12" or "12" is that issue; anything else searches the open issues' titles.
 async function findIssues(text) {
@@ -65,9 +65,14 @@ async function findIssues(text) {
     const issue = data?.issue;
     return issue && issue.team.id === t.id ? [issue] : [];
   }
-  const { issues } = await gql(`query($team: ID!, $q: String!) { issues(first: 25, orderBy: updatedAt, filter: {
-      team: { id: { eq: $team } }, title: { containsIgnoreCase: $q }, state: { type: { nin: ["completed", "canceled"] } } }) {
-    nodes { ${ISSUE} } } }`, { team: t.id, q });
+  // Every word has to be in the title or the parent's title: "doumo aura" is the Aura under Doumo.
+  const words = q.split(/\s+/).filter(Boolean).slice(0, 6);
+  const filter = {
+    team: { id: { eq: t.id } }, state: { type: { nin: ['completed', 'canceled'] } },
+    and: words.map(w => ({ or: [{ title: { containsIgnoreCase: w } }, { parent: { title: { containsIgnoreCase: w } } }] })),
+  };
+  const { issues } = await gql(`query($filter: IssueFilter!) { issues(first: 25, orderBy: updatedAt, filter: $filter) {
+    nodes { ${ISSUE} } } }`, { filter });
   return issues.nodes;
 }
 
@@ -143,7 +148,7 @@ async function handleContextMenu(interaction) {
   await interaction.showModal(new ModalBuilder().setCustomId(`${MODAL}:${key}`).setTitle('Send to Linear').addComponents(
     new ActionRowBuilder().addComponents(new TextInputBuilder()
       .setCustomId('issue').setLabel(`${TEAM} issue: ID or words from the title`)
-      .setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setPlaceholder('AST-12, or "Byakuya sword"')),
+      .setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100).setPlaceholder(`${team ? team.key : 'ASS'}-12, or "Byakuya sword"`)),
     new ActionRowBuilder().addComponents(new TextInputBuilder()
       .setCustomId('note').setLabel('Note for the comment (optional)')
       .setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(1000)),
@@ -182,7 +187,7 @@ async function handleModal(interaction) {
     return true;
   }
   if (!found.length) {
-    await interaction.editReply(`❌ No open issue in the ${TEAM} team matches that. Try its ID (like ${(team && team.key) || 'AST'}-12).`);
+    await interaction.editReply(`❌ No open issue in the ${TEAM} team matches that. Try its ID (like ${(team && team.key) || 'ASS'}-12).`);
     return true;
   }
   if (found.length === 1) { await finish(interaction, key, found[0]); return true; }
@@ -190,7 +195,11 @@ async function handleModal(interaction) {
   await interaction.editReply({
     content: `${found.length} issues match. Which one?`,
     components: [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`${PICK}:${key}`).setPlaceholder('Pick the issue')
-      .addOptions(found.map(i => ({ label: `${i.identifier}: ${i.title}`.slice(0, 100), description: i.state?.name?.slice(0, 100), value: i.id }))))],
+      // Many issues share a title ("Aura"), so say what each belongs to.
+      .addOptions(found.map(i => ({
+        label: `${i.identifier}: ${i.title}`.slice(0, 100), value: i.id,
+        description: [i.parent ? `Part of ${i.parent.identifier} ${i.parent.title}` : i.project?.name, i.state?.name].filter(Boolean).join(' · ').slice(0, 100) || undefined,
+      }))))],
   });
   return true;
 }

@@ -5,15 +5,17 @@
 //     puts the dev's name on the end of an issue's title ("Aura - Bryan") and
 //     moves it to In Progress, which turns their forum's dot 🟢 (linear-status.js)
 //   right-click a message with files → Apps → "Send to Linear"
-//     lists the tasks that dev has in progress to pick from, or search any
-//     issue; the files go on as a comment, the dev's name goes on the title if
-//     it wasn't, and the issue moves to Done
+//     lists that dev's tasks (in progress, done in the last two weeks, and the
+//     Shiny under each) to pick from, or search any issue, Done ones included;
+//     the files go on as a comment, the dev's name goes on the title if it
+//     wasn't, and the issue moves to Done
 //   /linear      a private message with buttons, each opening a form:
 //                  Give task     pick the dev, the issue, and (optionally) the name to show
 //                  Remove task   takes the name back off an issue, back to Todo
 //
-// Finding an issue: its ID (ASS-12, or 12) or words from its title or its
-// parent's ("doumo aura"). One match goes straight through; several give a list.
+// Finding an issue: its ID (ASS-12, or 12) or words from its title, its parent's
+// or its grandparent's ("doumo aura", "doumo aura shiny"). One match goes
+// straight through; several give a list.
 //
 // A dev's name on titles: what was typed for them last time (kept by the
 // backend), else their name on the asset roster, else their server name.
@@ -87,12 +89,13 @@ async function assetsTeam() {
   return team;
 }
 
-const ISSUE = 'id identifier title url state { name type } team { id } parent { identifier title } project { name }';
+const ISSUE = 'id identifier title url state { name type } team { id } parent { identifier title parent { identifier title } } project { name }';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // "ASS-12" or "12" is that issue; anything else searches the open issues'
-// titles and their parents'.
-async function findIssues(text, first = 25) {
+// titles, their parents' and their grandparents'. withDone takes in finished
+// ones too (files can arrive after someone has already marked the task Done).
+async function findIssues(text, first = 25, { withDone = false } = {}) {
   const t = await assetsTeam();
   const q = String(text || '').trim();
   const ref = UUID.test(q) ? q : /^[a-z]+-\d+$/i.test(q) ? q.toUpperCase() : /^\d+$/.test(q) ? `${t.key}-${q}` : null;
@@ -101,10 +104,12 @@ async function findIssues(text, first = 25) {
     const issue = data?.issue;
     return issue && issue.team.id === t.id ? [issue] : [];
   }
-  // Every word has to be in the title or the parent's title: "doumo aura" is the Aura under Doumo.
+  // Every word has to be in the title, the parent's or the grandparent's: "doumo aura" is
+  // the Aura under Doumo, "doumo aura shiny" the Shiny under that, "doumo shiny" all three of Doumo's Shinies.
   const words = q.split(/\s+/).filter(Boolean).slice(0, 6);
-  const filter = { team: { id: { eq: t.id } }, state: { type: { nin: ['completed', 'canceled'] } } };
-  if (words.length) filter.and = words.map(w => ({ or: [{ title: { containsIgnoreCase: w } }, { parent: { title: { containsIgnoreCase: w } } }] }));
+  const filter = { team: { id: { eq: t.id } }, state: { type: { nin: withDone ? ['canceled'] : ['completed', 'canceled'] } } };
+  const has = w => ({ title: { containsIgnoreCase: w } });
+  if (words.length) filter.and = words.map(w => ({ or: [has(w), { parent: has(w) }, { parent: { parent: has(w) } }] }));
   const { issues } = await gql(`query($filter: IssueFilter!, $first: Int!) { issues(first: $first, orderBy: updatedAt, filter: $filter) {
     nodes { ${ISSUE} } } }`, { filter, first });
   return issues.nodes;
@@ -118,8 +123,11 @@ async function startedIssues() {
   return issues.nodes;
 }
 
-// What an issue belongs to, for telling apart the many that share a title ("Aura").
-const context = i => [i.parent ? `Part of ${i.parent.identifier} ${i.parent.title}` : i.project?.name, i.state?.name].filter(Boolean).join(' · ');
+// What an issue belongs to, for telling apart the many that share a title ("Aura", "Shiny").
+const context = i => [
+  i.parent ? `Part of ${i.parent.identifier} ${i.parent.title}${i.parent.parent ? ` (${i.parent.parent.title})` : ''}` : i.project?.name,
+  i.state?.name,
+].filter(Boolean).join(' · ');
 
 const comment = (issueId, body) => gql(`mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success } }`, { input: { issueId, body } });
 const updateIssue = (id, input) => gql(`mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }`, { id, input });
@@ -152,6 +160,28 @@ function nameOnTitle(title, names) {
 }
 function allNames(dir) {
   return new Set([...Object.values(dir.saved), ...dir.roster.map(d => d.name)].filter(Boolean).map(lower));
+}
+
+// A dev's tasks for Send to Linear: In Progress issues with one of their names on
+// the end, ones finished in the last two weeks (someone may have marked it Done
+// before the files came), and the Shiny under each of those.
+async function tasksToSendTo(devId, extraNames = []) {
+  const t = await assetsTeam();
+  const dir = await devDirectory();
+  const names = new Set(namesOf(dir, devId, extraNames));
+  if (!names.size) return [];
+  const { issues } = await gql(`query($team: ID!) { issues(first: 250, orderBy: updatedAt, filter: { team: { id: { eq: $team } }, or: [
+      { state: { type: { eq: "started" } } }, { state: { type: { eq: "completed" } }, completedAt: { gt: "-P14D" } } ] }) {
+    nodes { ${ISSUE} } } }`, { team: t.id });
+  const mine = issues.nodes.filter(i => nameOnTitle(i.title, names))
+    .sort((a, b) => (a.state.type === 'started' ? 0 : 1) - (b.state.type === 'started' ? 0 : 1));
+  if (!mine.length) return [];
+  const { issues: shinies } = await gql(`query($parents: [ID!]) { issues(first: 100, filter: { parent: { id: { in: $parents } },
+      title: { containsIgnoreCase: "shiny" }, state: { type: { neq: "canceled" } } }) { nodes { ${ISSUE} } } }`, { parents: mine.map(i => i.id) });
+  // Each Shiny right after the task it belongs to.
+  const out = [];
+  for (const task of mine) out.push(task, ...shinies.nodes.filter(s => s.parent?.identifier === task.identifier && !mine.includes(s)));
+  return out;
 }
 
 // A dev's tasks in progress: In Progress issues with one of their names on the end.
@@ -330,21 +360,21 @@ async function handleContextMenu(interaction) {
     link: `https://discord.com/channels/${interaction.guildId || '@me'}/${message.channelId}/${message.id}`,
   });
   let tasks = [];
-  try { tasks = await activeTasksFor(dev.id, [name]); } catch (err) {
-    console.error('[Linear] Could not list tasks in progress:', err.message);
+  try { tasks = await tasksToSendTo(dev.id, [name]); } catch (err) {
+    console.error('[Linear] Could not list the dev\'s tasks:', err.message);
   }
   const rows = [];
   if (tasks.length) {
     pending.get(key).choices = new Map(tasks.map(i => [i.id, i]));
-    rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`${PICK}:${key}`).setPlaceholder(`${name}'s tasks in progress`)
+    rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`${PICK}:${key}`).setPlaceholder(`${name}'s tasks`)
       .addOptions(tasks.slice(0, 25).map(i => ({ label: `${i.identifier}: ${i.title}`.slice(0, 100), value: i.id, description: context(i).slice(0, 100) || undefined })))));
   }
   rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`${SEARCH}:${key}`)
     .setLabel(tasks.length ? 'Another issue…' : 'Search for the issue').setEmoji('🔎').setStyle(tasks.length ? ButtonStyle.Secondary : ButtonStyle.Primary)));
   await interaction.editReply({
     content: `Send ${plural(files.length, 'file')} from **${name}** to Linear. ` +
-      (tasks.length ? `Pick one of their tasks in progress, or search for another issue.` : `${name} has nothing in progress, so search for the issue.`) +
-      '\n-# It moves to Done. An issue that isn\'t theirs gets their name put on it.',
+      (tasks.length ? `Pick one of their tasks (in progress, recently done, and the Shiny under each), or search for another issue.` : `${name} has nothing in progress or recently done, so search for the issue.`) +
+      '\n-# It moves to Done. An issue that isn\'t theirs gets their name put on it. Search finds Done issues too; "doumo aura shiny" finds a Shiny.',
     components: rows,
   });
   return true;
@@ -367,13 +397,14 @@ async function finish(interaction, key, issue) {
 // Finds the issue the text means and finishes the job, or asks which one.
 async function resolve(interaction, key, text) {
   let found;
-  try { found = await findIssues(text); } catch (err) {
+  const withDone = pending.get(key)?.action === 'send';
+  try { found = await findIssues(text, 25, { withDone }); } catch (err) {
     console.error('[Linear] search failed:', err.response?.data || err.message);
     await interaction.editReply({ content: `❌ Could not reach Linear: ${err.message}`, components: [] });
     return;
   }
   if (!found.length) {
-    await interaction.editReply({ content: `❌ No open issue in the ${TEAM} team matches that. Try its ID (like ${(team && team.key) || 'ASS'}-12).`, components: [] });
+    await interaction.editReply({ content: `❌ No ${withDone ? '' : 'open '}issue in the ${TEAM} team matches that. Try its ID (like ${(team && team.key) || 'ASS'}-12).`, components: [] });
     return;
   }
   if (found.length === 1) { await finish(interaction, key, found[0]); return; }

@@ -12,6 +12,7 @@
 //   /linear      a private message with buttons, each opening a form:
 //                  Give task     pick the dev, the issue, and (optionally) the name to show
 //                  Remove task   takes the name back off an issue, back to Todo
+//                  Get files     posts the files on an issue in the channel (pick which, or all)
 //
 // Finding an issue: its ID (ASS-12, or 12) or words from its title, its parent's
 // or its grandparent's ("doumo aura", "doumo aura shiny"). One match goes
@@ -44,6 +45,8 @@ const PICK = 'linear-pick';
 const SEARCH = 'linear-search';   // "Search for the issue" under Send to Linear's task list
 const MENU = 'linear-menu';       // the buttons /linear posts
 const MENU_FORM = 'linear-menu-form';
+const FILES = 'linear-files';     // which of an issue's files to post
+const ALL = 'linear-all';         // post them all
 // integration_types 0 and 1: installed to a server or to a user's account.
 // contexts 0, 1, 2: usable in servers, in the bot's own DM, and in other DMs and group chats.
 const ANYWHERE = { integration_types: [0, 1], contexts: [0, 1, 2] };
@@ -299,6 +302,81 @@ async function remove(job, issue) {
 
 const ACTIONS = { send: [send, 'Sending files to'], give: [give, 'Giving'], remove: [remove, 'Updating'] };
 
+// ── files from Linear into Discord ───────────────────────────────────────────
+
+// Every file uploaded to an issue: in its description, its comments, or attached to it.
+// Linear keeps them at uploads.linear.app, readable only with the API key.
+const UPLOAD = /!?\[([^\]]*)\]\((https:\/\/uploads\.linear\.app\/[^)\s]+)\)/g;
+async function filesOn(issue) {
+  const { issue: found } = await gql(`query($id: String!) { issue(id: $id) {
+    description comments(first: 100) { nodes { body createdAt } } attachments { nodes { title url } } } }`, { id: issue.id });
+  const texts = [found.description || '', ...found.comments.nodes.sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(c => c.body)];
+  const files = new Map();
+  for (const text of texts) {
+    for (const [, label, url] of text.matchAll(UPLOAD)) if (!files.has(url)) files.set(url, label.trim() || url.split('/').pop());
+  }
+  for (const a of found.attachments.nodes) {
+    if (/^https:\/\/uploads\.linear\.app\//.test(a.url) && !files.has(a.url)) files.set(a.url, a.title || a.url.split('/').pop());
+  }
+  return [...files].map(([url, name], i) => ({ id: String(i), url, name: name.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 100) }));
+}
+
+// Posts the chosen files in the channel, as many to a message as Discord allows.
+// Anything over the upload limit is named with a link to the issue instead.
+async function postFiles(interaction, job, chosen) {
+  const issue = job.issue;
+  const limit = interaction.attachmentSizeLimit || 10 * 1024 * 1024;
+  await interaction.editReply({ content: `⏳ Getting ${plural(chosen.length, 'file')} from **${issue.identifier}**…`, components: [] });
+  const ready = [];
+  const tooBig = [];
+  const failed = [];
+  for (const f of chosen) {
+    try {
+      const got = await axios.get(f.url, { headers: { Authorization: KEY }, responseType: 'arraybuffer', timeout: 120000, maxContentLength: limit, maxBodyLength: limit });
+      ready.push({ attachment: Buffer.from(got.data), name: f.name });
+    } catch (err) {
+      if (/maxContentLength|exceeded/i.test(err.message)) tooBig.push(f.name);
+      else { failed.push(f.name); console.error(`[Linear] Could not download ${f.name}:`, err.message); }
+    }
+  }
+  const head = `📥 From [${issue.identifier}: ${issue.title}](<${issue.url}>)${issue.parent ? ` · ${context(issue).split(' · ')[0]}` : ''}, shared by ${job.by}`;
+  const notes = [
+    tooBig.length ? `Too big for Discord, on the issue: ${tooBig.join(', ')}` : '',
+    failed.length ? `Could not get: ${failed.join(', ')}` : '',
+  ].filter(Boolean).map(n => `\n-# ${n}`).join('');
+  // Up to 10 files a message, and together no more than the limit.
+  const batches = [];
+  for (const file of ready) {
+    const last = batches[batches.length - 1];
+    if (last && last.length < 10 && last.reduce((n, f) => n + f.attachment.length, 0) + file.attachment.length <= limit) last.push(file);
+    else batches.push([file]);
+  }
+  if (!batches.length) batches.push([]);
+  for (const [i, files] of batches.entries()) {
+    await interaction.followUp({ content: i === 0 ? head + notes : undefined, files, allowedMentions: { parse: [] } });
+  }
+  await interaction.editReply({ content: `✅ Posted ${plural(ready.length, 'file')} from ${issue.identifier}.${tooBig.length ? ` ${plural(tooBig.length, 'file')} too big for Discord.` : ''}`, components: [] });
+}
+
+// Get files: one file goes straight up; several give a list to pick from, or "Post all".
+async function getFiles(interaction, key, job, issue) {
+  await interaction.editReply({ content: `⏳ Looking at **${issue.identifier}**…`, components: [] });
+  const files = await filesOn(issue);
+  if (!files.length) { await interaction.editReply(`There are no files on [${issue.identifier}: ${issue.title}](<${issue.url}>).`); return; }
+  job.issue = issue;
+  job.files = files;
+  if (files.length === 1) { pending.delete(key); await postFiles(interaction, job, files); return; }
+  const shown = files.slice(0, 25);
+  await interaction.editReply({
+    content: `**${issue.identifier}: ${issue.title}** has ${plural(files.length, 'file')}. Pick which to post here, or post them all.`,
+    components: [
+      new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`${FILES}:${key}`).setPlaceholder('Pick files')
+        .setMinValues(1).setMaxValues(shown.length).addOptions(shown.map(f => ({ label: f.name.slice(0, 100), value: f.id })))),
+      new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`${ALL}:${key}`).setLabel(`Post all ${files.length}`).setEmoji('📥').setStyle(ButtonStyle.Primary)),
+    ],
+  });
+}
+
 // ── Discord ──────────────────────────────────────────────────────────────────
 
 function getCommandDefinitions() {
@@ -309,7 +387,7 @@ function getCommandDefinitions() {
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator).toJSON(),
     ...ANYWHERE,
   });
-  const slash = new SlashCommandBuilder().setName('linear').setDescription(`Linear ${TEAM}: give or remove a task`)
+  const slash = new SlashCommandBuilder().setName('linear').setDescription(`Linear ${TEAM}: give or remove a task, or get an issue's files`)
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
   return [menu(SEND), menu(GIVE), { ...slash.toJSON(), ...ANYWHERE }];
 }
@@ -383,6 +461,13 @@ async function handleContextMenu(interaction) {
 async function finish(interaction, key, issue) {
   const job = pending.get(key);
   if (!job) return interaction.editReply({ content: '❌ That took too long. Try again.', components: [] });
+  if (job.action === 'get') {
+    try { await getFiles(interaction, key, job, issue); } catch (err) {
+      console.error('[Linear] get files failed:', err.response?.data || err.message);
+      await interaction.editReply({ content: `❌ Could not get the files from ${issue.identifier}: ${err.message}`, components: [] });
+    }
+    return;
+  }
   pending.delete(key);
   const [run, doing] = ACTIONS[job.action];
   await interaction.editReply({ content: `⏳ ${doing} **${issue.identifier}**…`, components: [] });
@@ -397,7 +482,7 @@ async function finish(interaction, key, issue) {
 // Finds the issue the text means and finishes the job, or asks which one.
 async function resolve(interaction, key, text) {
   let found;
-  const withDone = pending.get(key)?.action === 'send';
+  const withDone = ['send', 'get'].includes(pending.get(key)?.action);
   try { found = await findIssues(text, 25, { withDone }); } catch (err) {
     console.error('[Linear] search failed:', err.response?.data || err.message);
     await interaction.editReply({ content: `❌ Could not reach Linear: ${err.message}`, components: [] });
@@ -437,6 +522,16 @@ async function handleModal(interaction) {
 }
 
 async function handleSelect(interaction) {
+  if (interaction.customId?.startsWith(`${FILES}:`)) {
+    if (!allowed(interaction)) return nope(interaction);
+    const key = interaction.customId.slice(FILES.length + 1);
+    const job = pending.get(key);
+    await interaction.deferUpdate();
+    if (!job?.files) { await interaction.editReply({ content: '❌ That took too long. Try again.', components: [] }); return true; }
+    pending.delete(key);
+    await postFiles(interaction, job, job.files.filter(f => interaction.values.includes(f.id)));
+    return true;
+  }
   if (!interaction.customId?.startsWith(`${PICK}:`)) return false;
   if (!allowed(interaction)) return nope(interaction);
   const key = interaction.customId.slice(PICK.length + 1);
@@ -460,6 +555,7 @@ async function handleCommand(interaction) {
     components: [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${MENU}:give`).setLabel('Give task').setEmoji('🧑‍💻').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`${MENU}:remove`).setLabel('Remove task').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${MENU}:get`).setLabel('Get files').setEmoji('📥').setStyle(ButtonStyle.Secondary),
     )],
   });
   return true;
@@ -476,10 +572,21 @@ const nameField = () => new LabelBuilder().setLabel('Name on the issue (optional
 const MENU_FORMS = {
   give: () => new ModalBuilder().setCustomId(`${MENU_FORM}:give`).setTitle('Give a task').addLabelComponents(devField(), issueField(), nameField()),
   remove: () => new ModalBuilder().setCustomId(`${MENU_FORM}:remove`).setTitle('Remove a task').addLabelComponents(issueField()),
+  get: () => new ModalBuilder().setCustomId(`${MENU_FORM}:get`).setTitle('Get files from Linear').addLabelComponents(issueField()),
 };
 
 // /linear's buttons open their form; "Search for the issue" opens the search form for Send to Linear.
 async function handleButton(interaction) {
+  if (interaction.customId?.startsWith(`${ALL}:`)) {
+    if (!allowed(interaction)) return nope(interaction);
+    const key = interaction.customId.slice(ALL.length + 1);
+    const job = pending.get(key);
+    await interaction.deferUpdate();
+    if (!job?.files) { await interaction.editReply({ content: '❌ That took too long. Try again.', components: [] }); return true; }
+    pending.delete(key);
+    await postFiles(interaction, job, job.files);
+    return true;
+  }
   if (interaction.customId?.startsWith(`${SEARCH}:`)) {
     if (!allowed(interaction)) return nope(interaction);
     const key = interaction.customId.slice(SEARCH.length + 1);
@@ -507,7 +614,9 @@ async function handleMenuForm(interaction) {
     const member = interaction.fields.getSelectedMembers('dev')?.first();
     return { devId: user.id, name: cleanName(interaction.fields.getTextInputValue('name')) || cleanName(await nameFor(user, member)) };
   };
-  if (action === 'remove') {
+  if (action === 'get') {
+    await resolve(interaction, hold({ action: 'get', by: by(interaction) }), issue);
+  } else if (action === 'remove') {
     await resolve(interaction, hold({ action: 'remove', by: by(interaction) }), issue);
   } else if (action === 'give') {
     const dev = await pickedDev();

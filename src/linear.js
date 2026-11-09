@@ -11,7 +11,6 @@
 //   /linear      a private message with buttons, each opening a form:
 //                  Give task     pick the dev, the issue, and (optionally) the name to show
 //                  Remove task   takes the name back off an issue, back to Todo
-//                  Send files    upload files from your computer onto an issue, and it moves to Done
 //
 // Finding an issue: its ID (ASS-12, or 12) or words from its title or its
 // parent's ("doumo aura"). One match goes straight through; several give a list.
@@ -28,7 +27,7 @@ const axios = require('axios');
 const {
   ContextMenuCommandBuilder, ApplicationCommandType, PermissionFlagsBits, MessageFlags, SlashCommandBuilder,
   ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, StringSelectMenuBuilder,
-  ButtonBuilder, ButtonStyle, LabelBuilder, UserSelectMenuBuilder, FileUploadBuilder,
+  ButtonBuilder, ButtonStyle, LabelBuilder, UserSelectMenuBuilder,
 } = require('discord.js');
 
 const KEY = process.env.LINEAR_API_KEY;
@@ -280,7 +279,7 @@ function getCommandDefinitions() {
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator).toJSON(),
     ...ANYWHERE,
   });
-  const slash = new SlashCommandBuilder().setName('linear').setDescription(`Linear ${TEAM}: give or remove a task, or send files`)
+  const slash = new SlashCommandBuilder().setName('linear').setDescription(`Linear ${TEAM}: give or remove a task`)
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
   return [menu(SEND), menu(GIVE), { ...slash.toJSON(), ...ANYWHERE }];
 }
@@ -430,7 +429,6 @@ async function handleCommand(interaction) {
     components: [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${MENU}:give`).setLabel('Give task').setEmoji('🧑‍💻').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`${MENU}:remove`).setLabel('Remove task').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`${MENU}:send`).setLabel('Send files').setEmoji('📎').setStyle(ButtonStyle.Secondary),
     )],
   });
   return true;
@@ -439,21 +437,14 @@ async function handleCommand(interaction) {
 const issueField = () => new LabelBuilder().setLabel(`${TEAM} issue`).setDescription('Its ID, or words from its title or its parent\'s')
   .setTextInputComponent(new TextInputBuilder().setCustomId('issue').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100)
     .setPlaceholder(`${team ? team.key : 'ASS'}-12, or "doumo aura"`));
-const devField = required => new LabelBuilder().setLabel(required ? 'Dev' : 'Dev (optional)')
-  .setDescription(required ? 'Who the task is for' : 'Whose work it is: their name goes on the issue if it isn\'t already')
-  .setUserSelectMenuComponent(new UserSelectMenuBuilder().setCustomId('dev').setRequired(required).setMinValues(required ? 1 : 0).setMaxValues(1));
+const devField = () => new LabelBuilder().setLabel('Dev').setDescription('Who the task is for')
+  .setUserSelectMenuComponent(new UserSelectMenuBuilder().setCustomId('dev').setRequired(true).setMaxValues(1));
 const nameField = () => new LabelBuilder().setLabel('Name on the issue (optional)').setDescription('Blank: the name used last time, their roster name, or their server name')
   .setTextInputComponent(new TextInputBuilder().setCustomId('name').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(40));
 
 const MENU_FORMS = {
-  give: () => new ModalBuilder().setCustomId(`${MENU_FORM}:give`).setTitle('Give a task').addLabelComponents(devField(true), issueField(), nameField()),
+  give: () => new ModalBuilder().setCustomId(`${MENU_FORM}:give`).setTitle('Give a task').addLabelComponents(devField(), issueField(), nameField()),
   remove: () => new ModalBuilder().setCustomId(`${MENU_FORM}:remove`).setTitle('Remove a task').addLabelComponents(issueField()),
-  send: () => new ModalBuilder().setCustomId(`${MENU_FORM}:send`).setTitle('Send files to Linear').addLabelComponents(
-    new LabelBuilder().setLabel('Files').setDescription('Up to 10. The issue moves to Done.')
-      .setFileUploadComponent(new FileUploadBuilder().setCustomId('files').setRequired(true).setMinValues(1).setMaxValues(10)),
-    issueField(), devField(false), nameField(),
-    new LabelBuilder().setLabel('Note for the comment (optional)').setTextInputComponent(noteInput()),
-  ),
 };
 
 // /linear's buttons open their form; "Search for the issue" opens the search form for Send to Linear.
@@ -491,11 +482,6 @@ async function handleMenuForm(interaction) {
     const dev = await pickedDev();
     if (!dev.devId) { await interaction.editReply('❌ Pick the dev.'); return true; }
     await resolve(interaction, hold({ action: 'give', ...dev, by: by(interaction) }), issue);
-  } else if (action === 'send') {
-    const files = [...(interaction.fields.getUploadedFiles('files')?.values() || [])].slice(0, 10)
-      .map(a => ({ name: a.name, url: a.url, contentType: a.contentType || null }));
-    if (!files.length) { await interaction.editReply('❌ Add at least one file.'); return true; }
-    await resolve(interaction, hold({ action: 'send', files, note: interaction.fields.getTextInputValue('note').trim(), by: by(interaction), ...await pickedDev() }), issue);
   }
   return true;
 }

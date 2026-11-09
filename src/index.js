@@ -18,6 +18,7 @@ const qaCheck = require('./qa-check');
 const devTags = require('./dev-tags');
 const robloxConvert = require('./roblox-convert');
 const linear = require('./linear');
+const linearStatus = require('./linear-status');
 const forumSync = require('./forum-sync');
 const teamCommands = require('./team-commands');
 
@@ -123,6 +124,7 @@ client.once(Events.ClientReady, async (c) => {
   await registerCommands();
   await reportPause.syncPauseState();
   personal.start(client); // no-op unless PERSONAL_OWNER_DISCORD_ID is set
+  linearStatus.start(client); // 🟢/🟡 on devs' forums from Linear's In Progress; needs ASSET_STATUS_POSTS=true
   tickets.start(client, threadReportMap); // the remaining Ticket Tool tickets; off with TICKETS_ENABLED=false
   // Dev-name tags (Ricky, Bryan, ...) on every post in the report forums.
   devTags.syncAll(client, Object.keys(WATCHED_CHANNELS).filter(id => WATCHED_CHANNELS[id] !== 'import'));

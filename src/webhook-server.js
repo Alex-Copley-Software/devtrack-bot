@@ -32,7 +32,7 @@ function start() {
       return;
     }
 
-    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers', '/reports-pause-state', '/qa-check', '/qa-check-update', '/model-rbxm'].includes(req.url)) {
+    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers', '/reports-pause-state', '/qa-check', '/qa-check-update', '/model-rbxm', '/linear-refresh'].includes(req.url)) {
       res.writeHead(404);
       res.end();
       return;
@@ -54,6 +54,14 @@ function start() {
         res.end(JSON.stringify({ success: true }));
 
         await sendServerAlert({ kind, count, oldestAge, url });
+        return;
+      }
+
+      // A dev was added or changed on the Developers page: redo the Linear dots now.
+      if (req.url === '/linear-refresh') {
+        require('./linear-status').refreshSoon(1000);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
         return;
       }
 

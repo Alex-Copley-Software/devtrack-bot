@@ -1,18 +1,23 @@
 // linear-status.js
-// Shows each dev's availability on their forum (or forum post) by prefixing its name:
+// Shows each dev's availability by putting a dot in front of the name of their
+// place on Discord (a category, forum, channel or forum post):
 //
 //   🟢  has a task in progress in Linear (an In Progress issue with their name on the end)
 //   🟡  nothing in progress, ready to be tasked
 //
-// Linear decides who is busy; the asset roster (GET /api/bot/assets/dev-status)
-// says who each dev is and where their dot goes: the "Status post" on their
-// roster entry (a forum channel or one post). A dev with none set falls back to
-// a post whose title starts with their name, in the forums the asset roster
-// lists. Dots the bot left anywhere else are taken off again.
+// Linear decides who is busy. The Developers page on DevTrack (backend
+// /api/bot/devs) says who each dev is and which place is theirs; a dev with no
+// place gets no dot. Dots the bot left on a place that is no longer anyone's
+// are taken off again.
+//
+// After each sync the bot reports back to that page: each dev's dot, their
+// tasks in progress and any problem with their place, plus the server's
+// categories and channels for the page's picker.
 //
 // Runs every two minutes, and a few seconds after a task is given, taken off or
-// finished from Discord. Needs LINEAR_API_KEY and ASSET_STATUS_POSTS=true, and
-// Manage Channels (forums) or Manage Threads (posts) where the dots go.
+// finished from Discord, or a dev is changed on the page. Needs LINEAR_API_KEY
+// and ASSET_STATUS_POSTS=true, and Manage Channels (categories, forums,
+// channels) or Manage Threads (posts) where the dots go.
 // ASSET_STATUS_POSTS_DRY_RUN=true logs the renames instead of making them.
 
 const axios = require('axios');
@@ -23,6 +28,7 @@ const API_URL = process.env.API_URL || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
 const ENABLED = String(process.env.ASSET_STATUS_POSTS || '').toLowerCase() === 'true';
 const DRY_RUN = String(process.env.ASSET_STATUS_POSTS_DRY_RUN || '').toLowerCase() === 'true';
+const bot = { headers: { 'x-bot-secret': BOT_SECRET }, timeout: 10000 };
 
 const SYNC_MS = 2 * 60 * 1000;
 const TASKED = '🟢';
@@ -34,43 +40,22 @@ const PREFIX = /^(?:\s*(?:🟢|🟡))+\s*/u;
 const RENAME_WINDOW_MS = 10 * 60 * 1000;
 const renames = new Map(); // channelId -> [timestamps]
 const complained = new Set();
+const dotted = new Set(); // posts the bot put a dot on (channels are found by name)
 let lastSummary = '';
+let lastChannels = '';
+let lastStatus = '';
 let client = null;
 let running = false;
 let soon = null;
 
 const base = name => String(name || '').replace(PREFIX, '');
-
-// "Ruku Chat (Mesh & Texture)" belongs to Ruku; "Rukus corner" does not.
-function titleMatches(title, devName) {
-  const t = base(title).toLowerCase();
-  const n = String(devName || '').trim().toLowerCase();
-  if (n.length < 2 || !t.startsWith(n)) return false;
-  const next = t[n.length];
-  return next === undefined || !/[\p{L}\p{N}]/u.test(next);
-}
-
-// The forums the dev's fallback posts can be in: the ones the roster's settings list.
-async function fallbackForumIds() {
-  const config = await axios.get(`${API_URL}/api/bot/assets/agent/config`, { headers: { 'x-bot-secret': BOT_SECRET }, timeout: 10000 })
-    .then(r => r.data).catch(() => null);
-  return config?.enabled ? [...(config.channelIds || []), ...(config.teamCategoryIds || [])] : [];
-}
-
-async function forumsUnder(ids) {
-  const forums = new Map();
-  for (const id of ids) {
-    const channel = await client.channels.fetch(id).catch(() => null);
-    if (!channel) continue;
-    if (channel.type === ChannelType.GuildForum) forums.set(channel.id, channel);
-    else if (channel.type === ChannelType.GuildCategory) {
-      for (const child of channel.children.cache.values()) if (child.type === ChannelType.GuildForum) forums.set(child.id, child);
-    }
-  }
-  return [...forums.values()];
-}
-
 const dotOf = name => (String(name || '').match(/^\s*(🟢|🟡)/u) || [])[1] || '';
+
+// Places a dot can go, for the page's picker.
+const PICKABLE = {
+  [ChannelType.GuildCategory]: 'category', [ChannelType.GuildForum]: 'forum',
+  [ChannelType.GuildText]: 'text', [ChannelType.GuildAnnouncement]: 'announcement', [ChannelType.GuildMedia]: 'media',
+};
 
 // dot: TASKED, FREE, or '' to take a dot off. Compared by dot, not by the
 // whole name, because Discord rewrites some channel names (spaces to dashes).
@@ -90,57 +75,77 @@ async function rename(channel, dot) {
   } catch (err) {
     if (!complained.has(channel.id)) {
       complained.add(channel.id);
-      console.error(`[LinearStatus] Could not rename "${channel.name}" (${channel.id}): ${err.message}. The bot needs Manage Channels (forums) or Manage Threads (posts) there.`);
+      console.error(`[LinearStatus] Could not rename "${channel.name}" (${channel.id}): ${err.message}. The bot needs Manage Channels (categories, forums, channels) or Manage Threads (posts) there.`);
     }
     return 'failed';
   }
 }
 
+async function reportChannels() {
+  const channels = [];
+  for (const guild of client.guilds.cache.values()) {
+    for (const c of guild.channels.cache.values()) {
+      if (!PICKABLE[c.type]) continue;
+      channels.push({ id: c.id, name: base(c.name), type: PICKABLE[c.type], parentId: c.parentId || null, parentName: c.parent ? base(c.parent.name) : null, guildName: guild.name, position: c.rawPosition ?? 0 });
+    }
+  }
+  channels.sort((a, b) => (a.guildName || '').localeCompare(b.guildName || '') || a.position - b.position);
+  const text = JSON.stringify(channels);
+  if (text === lastChannels) return;
+  await axios.put(`${API_URL}/api/bot/devs/channels`, { channels }, bot);
+  lastChannels = text;
+}
+
 async function sync() {
   const dir = await linear.devDirectory(true);
-  if (!dir.roster.length) return; // the roster isn't reachable: leave the dots as they are
+  if (!dir.ok) return; // the list isn't reachable: leave the dots as they are
+  await reportChannels().catch(err => console.error('[LinearStatus] Could not send the channel list:', err.message));
   const started = await linear.startedIssues();
-  const devs = dir.roster.map(d => {
-    const names = new Set(linear.namesOf(dir, d.discordUserId, [d.name]));
-    return { ...d, busy: started.filter(i => linear.nameOnTitle(i.title, names)).length };
-  });
 
-  const pinned = new Set(devs.map(d => d.discordThreadId).filter(Boolean));
-  const forums = await forumsUnder([...await fallbackForumIds(), ...pinned]);
-  const posts = [];
-  for (const forum of forums) {
-    const active = await forum.threads?.fetchActive().catch(() => null);
-    if (active) posts.push(...active.threads.values());
-  }
-
-  const matched = [];
-  const unmatched = [];
-  // Longest names first, so "Rabbit3D" claims its post before a shorter name could.
+  const status = {};
   const claimed = new Set();
-  for (const dev of [...devs].sort((a, b) => b.name.length - a.name.length)) {
-    let mine = [];
-    if (dev.discordThreadId) {
-      const target = await client.channels.fetch(dev.discordThreadId).catch(() => null);
-      if (target && typeof target.setName === 'function' && !target.archived) mine = [target];
-    } else {
-      mine = posts.filter(p => !claimed.has(p.id) && titleMatches(p.name, dev.name));
-    }
-    if (!mine.length) { unmatched.push(dev.name); continue; }
-    for (const channel of mine) {
-      claimed.add(channel.id);
-      await rename(channel, dev.busy ? TASKED : FREE);
-      matched.push(`${dev.name}${dev.busy ? ` (${dev.busy})` : ''}`);
-    }
+  const problems = [];
+  let busyDevs = 0;
+  for (const dev of dir.roster) {
+    const names = new Set(linear.namesOf(dir, dev.discordUserId, [dev.name]));
+    const tasks = started.filter(i => linear.nameOnTitle(i.title, names));
+    if (tasks.length) busyDevs++;
+    const entry = { dot: tasks.length ? 'busy' : 'free', place: null, problem: null, tasks: tasks.map(i => ({ identifier: i.identifier, title: i.title, url: i.url })) };
+    status[dev.id] = entry;
+    if (!dev.channelId) { entry.dot = null; continue; }
+    const place = await client.channels.fetch(dev.channelId).catch(() => null);
+    if (!place || typeof place.setName !== 'function') { entry.problem = 'The bot can\'t see that channel'; problems.push(dev.name); continue; }
+    entry.place = { id: place.id, name: base(place.name) };
+    if (place.isThread?.() && place.archived) { entry.problem = 'That post is closed (archived)'; problems.push(dev.name); continue; }
+    claimed.add(place.id);
+    const result = await rename(place, tasks.length ? TASKED : FREE);
+    if (place.isThread?.()) dotted.add(place.id);
+    if (result === 'failed') { entry.problem = 'The bot isn\'t allowed to rename it'; problems.push(dev.name); }
+    if (result === 'waiting') entry.problem = 'Discord allows two renames per 10 minutes; it will catch up';
   }
 
-  // Take the dot off posts and forums that are no longer anyone's status place.
+  // Take the dot off places that are no longer anyone's.
   let cleared = 0;
-  for (const stale of [...posts, ...forums]) {
-    if (!claimed.has(stale.id) && dotOf(stale.name) && await rename(stale, '') === 'renamed') cleared++;
+  const stale = [];
+  for (const guild of client.guilds.cache.values()) {
+    for (const c of guild.channels.cache.values()) if (PICKABLE[c.type] && !claimed.has(c.id) && dotOf(c.name)) stale.push(c);
+  }
+  for (const id of dotted) {
+    if (claimed.has(id)) continue;
+    const post = await client.channels.fetch(id).catch(() => null);
+    if (post && dotOf(post.name)) stale.push(post); else dotted.delete(id);
+  }
+  for (const c of stale) if (await rename(c, '') === 'renamed') { cleared++; dotted.delete(c.id); }
+
+  const text = JSON.stringify(status);
+  if (text !== lastStatus) {
+    await axios.put(`${API_URL}/api/bot/devs/status`, { status }, bot).then(() => { lastStatus = text; })
+      .catch(err => console.error('[LinearStatus] Could not report the dots:', err.message));
   }
 
-  const text = `${matched.length} status place(s), ${devs.filter(d => d.busy).length} dev(s) with work in progress; ${cleared} old dot(s) removed; no place for: ${unmatched.sort().join(', ') || 'nobody'}`;
-  if (text !== lastSummary) { console.log(`[LinearStatus] ${text}`); lastSummary = text; }
+  const placed = dir.roster.filter(d => d.channelId).length;
+  const summary = `${placed} of ${dir.roster.length} dev(s) have a place, ${busyDevs} with work in progress; ${cleared} old dot(s) removed${problems.length ? `; problems: ${problems.sort().join(', ')}` : ''}`;
+  if (summary !== lastSummary) { console.log(`[LinearStatus] ${summary}`); lastSummary = summary; }
 }
 
 async function run() {
@@ -151,11 +156,11 @@ async function run() {
   } finally { running = false; }
 }
 
-// After a change from Discord: look again in a few seconds, once.
-function refreshSoon() {
+// After a change from Discord or the Developers page: look again in a few seconds, once.
+function refreshSoon(ms = 5000) {
   if (!client || !ENABLED || !linear.enabled()) return;
   clearTimeout(soon);
-  soon = setTimeout(run, 5000);
+  soon = setTimeout(run, ms);
 }
 
 function start(discordClient) {
@@ -166,4 +171,4 @@ function start(discordClient) {
   setInterval(run, SYNC_MS);
 }
 
-module.exports = { start, refreshSoon, titleMatches };
+module.exports = { start, refreshSoon };

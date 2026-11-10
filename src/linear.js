@@ -19,7 +19,7 @@
 // straight through; several give a list.
 //
 // A dev's name on titles: what was typed for them last time (kept by the
-// backend), else their name on the asset roster, else their server name.
+// backend), else their name on the Developers page, else their server name.
 // Names already on titles are recognised whether the bot or a person put them there.
 //
 // Who can use it: server admins in a server the bot is in, and the owner
@@ -138,17 +138,19 @@ const updateIssue = (id, input) => gql(`mutation($id: String!, $input: IssueUpda
 // ── who's who ────────────────────────────────────────────────────────────────
 const bot = { headers: { 'x-bot-secret': BOT_SECRET } };
 
-// The asset roster (name, Discord account, status forum) from the backend,
+// The Developers page (name, Discord account, place for the dot) from the backend,
 // and the names typed for each dev. Looked up at most every five minutes.
 let directory = null;
 let directoryAt = 0;
 async function devDirectory(fresh = false) {
   if (directory && !fresh && Date.now() - directoryAt < 5 * 60 * 1000) return directory;
-  const roster = await axios.get(`${API_URL}/api/bot/assets/dev-status`, { ...bot, timeout: 8000 }).then(r => r.data.devs || []).catch(() => []);
+  let ok = true;
+  const roster = await axios.get(`${API_URL}/api/bot/devs`, { ...bot, timeout: 8000 }).then(r => r.data.devs || [])
+    .catch(err => { ok = false; console.error('[Linear] Could not load the dev list:', err.message); return []; });
   const ids = roster.map(d => d.discordUserId).filter(Boolean);
   const saved = ids.length ? await axios.get(`${API_URL}/api/bot/linear-names`, { ...bot, timeout: 8000, params: { ids: ids.join(',') } }).then(r => r.data.names).catch(() => ({})) : {};
   const byId = new Map(roster.filter(d => d.discordUserId).map(d => [d.discordUserId, { ...d, saved: saved[d.discordUserId] || null }]));
-  directory = { roster, byId, saved };
+  directory = { roster, byId, saved, ok };
   directoryAt = Date.now();
   return directory;
 }
@@ -227,7 +229,7 @@ const remember = (id, name) => id && name && axios.put(`${API_URL}/api/bot/linea
   .then(() => { directoryAt = 0; })
   .catch(err => console.error('[Linear] Could not remember a name:', err.message));
 
-// A dev's name for a title: the one typed last time, their roster name, or their server name.
+// A dev's name for a title: the one typed last time, their name on the Developers page, or their server name.
 async function nameFor(user, member, timeout) {
   const dir = await Promise.race([devDirectory(), new Promise(r => setTimeout(() => r(null), timeout || 8000))]);
   const known = dir?.byId.get(user.id);
@@ -566,7 +568,7 @@ const issueField = () => new LabelBuilder().setLabel(`${TEAM} issue`).setDescrip
     .setPlaceholder(`${team ? team.key : 'ASS'}-12, or "doumo aura"`));
 const devField = () => new LabelBuilder().setLabel('Dev').setDescription('Who the task is for')
   .setUserSelectMenuComponent(new UserSelectMenuBuilder().setCustomId('dev').setRequired(true).setMaxValues(1));
-const nameField = () => new LabelBuilder().setLabel('Name on the issue (optional)').setDescription('Blank: the name used last time, their roster name, or their server name')
+const nameField = () => new LabelBuilder().setLabel('Name on the issue (optional)').setDescription('Blank: the name used last time, their Developers page name, or their server name')
   .setTextInputComponent(new TextInputBuilder().setCustomId('name').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(40));
 
 const MENU_FORMS = {

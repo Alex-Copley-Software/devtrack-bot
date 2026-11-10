@@ -5,6 +5,7 @@ const http = require('http');
 const { applyThreadAction, sendServerAlert, updateImportReaction, sendPatchFixNotice, sendTesterPing } = require('./discord-service');
 const reportPause = require('./report-pause');
 const qaCheck = require('./qa-check');
+const modelViewer = require('./model-viewer');
 
 const PORT = process.env.BOT_WEBHOOK_PORT || 3002;
 const SECRET = process.env.BOT_SECRET;
@@ -31,7 +32,7 @@ function start() {
       return;
     }
 
-    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers', '/reports-pause-state', '/qa-check', '/qa-check-update'].includes(req.url)) {
+    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers', '/reports-pause-state', '/qa-check', '/qa-check-update', '/model-rbxm'].includes(req.url)) {
       res.writeHead(404);
       res.end();
       return;
@@ -53,6 +54,20 @@ function start() {
         res.end(JSON.stringify({ success: true }));
 
         await sendServerAlert({ kind, count, oldestAge, url });
+        return;
+      }
+
+      // A .rbxm saved from Studio. Answered only once it's posted, so the backend's outbox tries again if not.
+      if (req.url === '/model-rbxm') {
+        try {
+          await modelViewer.postRbxm(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+        } catch (err) {
+          console.error('[Webhook] model-rbxm:', err.message);
+          res.writeHead(err.status || 502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
         return;
       }
 

@@ -5,6 +5,9 @@
 // be seen, named and exported as an FBX.
 //
 // Admins in the server; the owner anywhere, DMs included. Off with MODEL_VIEWER_ENABLED=false.
+//
+// "Get .rbxm" on that page has the Mac save the unit from Studio; the backend then
+// calls the webhook (/model-rbxm) and postRbxm() posts the file to RBXM_CHANNEL_ID.
 
 const axios = require('axios');
 const {
@@ -18,6 +21,11 @@ const DASHBOARD = (process.env.DASHBOARD_URL || 'https://lambent-lily-7bf643.net
 const OWNER = String(process.env.PERSONAL_OWNER_DISCORD_ID || process.env.CONVERT_OWNER_ID || '618957089833877518').trim();
 const ANYWHERE = { integration_types: [0, 1], contexts: [0, 1, 2] };
 const MAX_FILES = 5;
+const RBXM_CHANNEL_ID = String(process.env.RBXM_CHANNEL_ID || '').trim();
+const UPLOAD_LIMIT = 10 * 1024 * 1024; // Discord's upload limit for a bot in a server without boosts
+
+let client = null;
+const setClient = c => { client = c; };
 
 const allowed = interaction => interaction.user.id === OWNER
   || (interaction.inCachedGuild() && interaction.memberPermissions?.has(PermissionFlagsBits.Administrator));
@@ -75,4 +83,21 @@ async function handleContextMenu(interaction) {
   return true;
 }
 
-module.exports = { getCommandDefinitions, handleContextMenu, COMMAND };
+// A .rbxm saved from Studio, fetched from the backend and posted to the .rbxm channel.
+// Throws (so the backend keeps it in its outbox) unless it was posted; a 400 error means it never will be.
+class Refused extends Error { constructor(message) { super(message); this.status = 400; } }
+async function postRbxm({ id, file, model, by, assetId, size }) {
+  if (!RBXM_CHANNEL_ID) throw new Refused('RBXM_CHANNEL_ID is not set on the bot');
+  if (!id || !file) throw new Refused('id and file are required');
+  if (size > UPLOAD_LIMIT) throw new Refused(`${file} is ${(size / 1048576).toFixed(1)} MB, over Discord's 10 MB limit; download it from the page instead`);
+  if (!client?.isReady()) throw new Error('The bot is not connected to Discord yet');
+  const { data } = await axios.get(`${API_URL}/api/bot/models/${encodeURIComponent(id)}/rbxm`, {
+    headers: { 'x-bot-secret': process.env.BOT_SECRET }, responseType: 'arraybuffer', timeout: 60000,
+  });
+  const channel = await client.channels.fetch(RBXM_CHANNEL_ID);
+  const lines = [`🧊 **${file}**`, `-# From ${model || 'the Models page'}${by ? ` · saved by ${by}` : ''}${assetId ? ` · model asset ${assetId}` : ''} · [open in DevTrack](<${DASHBOARD}/models/?id=${id}>)`];
+  await channel.send({ content: lines.join('\n'), files: [{ attachment: Buffer.from(data), name: file }], allowedMentions: { parse: [] } });
+  console.log(`[ModelViewer] Posted ${file} to the .rbxm channel`);
+}
+
+module.exports = { getCommandDefinitions, handleContextMenu, setClient, postRbxm, COMMAND };

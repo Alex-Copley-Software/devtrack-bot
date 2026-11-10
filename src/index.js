@@ -121,6 +121,7 @@ client.once(Events.ClientReady, async (c) => {
   });
   console.log(`  API          → ${process.env.API_URL}`);
   qaCheck.setClient(client);
+  modelViewer.setClient(client);
   qaCheck.start(); // posts checks left unanswered in QA Requests
   webhookServer.start();
   await registerCommands();

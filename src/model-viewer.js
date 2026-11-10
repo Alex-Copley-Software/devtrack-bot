@@ -91,12 +91,19 @@ async function postRbxm({ id, file, model, by, assetId, size }) {
   if (!id || !file) throw new Refused('id and file are required');
   if (size > UPLOAD_LIMIT) throw new Refused(`${file} is ${(size / 1048576).toFixed(1)} MB, over Discord's 10 MB limit; download it from the page instead`);
   if (!client?.isReady()) throw new Error('The bot is not connected to Discord yet');
+  // Errors Discord or the backend will give again on a retry (a wrong channel id, missing permissions, no such file)
+  // are refused, so they show on the page instead of holding up the backend's outbox.
+  const refuse = what => err => {
+    const status = err.response?.status ?? err.status;
+    throw status >= 400 && status < 500 ? new Refused(`${what}: ${err.rawError?.message || err.response?.data?.error || err.message}`) : err;
+  };
   const { data } = await axios.get(`${API_URL}/api/bot/models/${encodeURIComponent(id)}/rbxm`, {
     headers: { 'x-bot-secret': process.env.BOT_SECRET }, responseType: 'arraybuffer', timeout: 60000,
-  });
-  const channel = await client.channels.fetch(RBXM_CHANNEL_ID);
+  }).catch(refuse('Could not fetch the .rbxm'));
+  const channel = await client.channels.fetch(RBXM_CHANNEL_ID).catch(refuse(`Can't open the .rbxm channel ${RBXM_CHANNEL_ID}`));
   const lines = [`🧊 **${file}**`, `-# From ${model || 'the Models page'}${by ? ` · saved by ${by}` : ''}${assetId ? ` · model asset ${assetId}` : ''} · [open in DevTrack](<${DASHBOARD}/models/?id=${id}>)`];
-  await channel.send({ content: lines.join('\n'), files: [{ attachment: Buffer.from(data), name: file }], allowedMentions: { parse: [] } });
+  await channel.send({ content: lines.join('\n'), files: [{ attachment: Buffer.from(data), name: file }], allowedMentions: { parse: [] } })
+    .catch(refuse(`Can't post in the .rbxm channel`));
   console.log(`[ModelViewer] Posted ${file} to the .rbxm channel`);
 }
 

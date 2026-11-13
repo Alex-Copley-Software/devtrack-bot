@@ -20,6 +20,7 @@ const robloxConvert = require('./roblox-convert');
 const linear = require('./linear');
 const linearStatus = require('./linear-status');
 const modelViewer = require('./model-viewer');
+const board = require('./board');
 const forumSync = require('./forum-sync');
 const teamCommands = require('./team-commands');
 
@@ -122,6 +123,7 @@ client.once(Events.ClientReady, async (c) => {
   console.log(`  API          → ${process.env.API_URL}`);
   qaCheck.setClient(client);
   modelViewer.setClient(client);
+  board.start(client); // the Assets board reads the channels it's told to (each dev's place, and any picked)
   qaCheck.start(); // posts checks left unanswered in QA Requests
   webhookServer.start();
   await registerCommands();
@@ -326,6 +328,8 @@ client.on(Events.MessageCreate, async (message) => {
   }
   // A DM to the bot: answered for the owner, ignored for everyone else, and never treated as a report.
   try { if (await personal.onMessage(message)) return; } catch (err) { console.error('[Personal] onMessage failed:', err.message); return; }
+  // The Assets board reads its channels; the message still goes on to anything else that wants it.
+  try { board.onMessage(message); } catch (err) { console.error('[Board] onMessage failed:', err.message); }
   if (process.env.IMPORTS_CHANNEL_ID && message.channelId === process.env.IMPORTS_CHANNEL_ID) {
     if (!message.attachments?.size) return;
     try {

@@ -52,7 +52,8 @@ const ALL = 'linear-all';         // post them all
 const ANYWHERE = { integration_types: [0, 1], contexts: [0, 1, 2] };
 
 // The dots on the devs' forums follow what's in progress; told to look again after each change.
-const refreshDots = () => require('./linear-status').refreshSoon();
+// ...and the Assets board on DevTrack reads Linear again too.
+const refreshDots = () => { require('./linear-status').refreshSoon(); require('./board').linearChanged(); };
 
 // What's being done, kept until the form (and, if needed, the pick) is done.
 //   { action: 'send', files, note, by, link?, message?, devId?, name? }

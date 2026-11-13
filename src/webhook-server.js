@@ -32,7 +32,7 @@ function start() {
       return;
     }
 
-    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers', '/reports-pause-state', '/qa-check', '/qa-check-update', '/model-rbxm', '/linear-refresh'].includes(req.url)) {
+    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers', '/reports-pause-state', '/qa-check', '/qa-check-update', '/model-rbxm', '/linear-refresh', '/board-digest', '/board-ping'].includes(req.url)) {
       res.writeHead(404);
       res.end();
       return;
@@ -58,6 +58,21 @@ function start() {
       }
 
       // A dev was added or changed on the Developers page: redo the Linear dots now.
+      // The Assets board: the owner's daily check-in DM, and asking a dev how a task is going.
+      if (req.url === '/board-digest' || req.url === '/board-ping') {
+        try {
+          const board = require('./board');
+          const how = req.url === '/board-digest' ? await board.digest(body) : await board.ping(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, how }));
+        } catch (err) {
+          console.error(`[Webhook] ${req.url}:`, err.message);
+          res.writeHead(err.status || 502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+        return;
+      }
+
       if (req.url === '/linear-refresh') {
         require('./linear-status').refreshSoon(1000);
         res.writeHead(200, { 'Content-Type': 'application/json' });

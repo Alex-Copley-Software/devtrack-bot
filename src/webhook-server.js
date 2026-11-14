@@ -32,7 +32,7 @@ function start() {
       return;
     }
 
-    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers', '/reports-pause-state', '/qa-check', '/qa-check-update', '/model-rbxm', '/linear-refresh', '/board-digest', '/board-ping'].includes(req.url)) {
+    if (req.method !== 'POST' || !['/action', '/alert', '/import-status', '/patch-fix', '/ping-testers', '/reports-pause-state', '/qa-check', '/qa-check-update', '/model-rbxm', '/dots-refresh', '/linear-refresh', '/board-digest', '/board-ping'].includes(req.url)) {
       res.writeHead(404);
       res.end();
       return;
@@ -57,7 +57,6 @@ function start() {
         return;
       }
 
-      // A dev was added or changed on the Developers page: redo the Linear dots now.
       // The Assets board: the owner's daily check-in DM, and asking a dev how a task is going.
       if (req.url === '/board-digest' || req.url === '/board-ping') {
         try {
@@ -73,8 +72,10 @@ function start() {
         return;
       }
 
-      if (req.url === '/linear-refresh') {
-        require('./linear-status').refreshSoon(1000);
+      // A task or a dev changed on the Assets page: redo the dots now. (/linear-refresh is the old name,
+      // still sent by a backend that hasn't been redeployed yet.)
+      if (req.url === '/dots-refresh' || req.url === '/linear-refresh') {
+        require('./dev-status').refreshSoon(1000);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
         return;

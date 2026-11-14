@@ -1,28 +1,26 @@
-// linear-status.js
+// dev-status.js
 // Shows each dev's availability by putting a dot in front of the name of their
 // place on Discord (a category, forum, channel or forum post):
 //
-//   🟢  has a task in progress in Linear (an In Progress issue with their name on the end)
+//   🟢  has a task in progress on the Assets board
 //   🟡  nothing in progress, ready to be tasked
 //
-// Linear decides who is busy. The Developers page on DevTrack (backend
-// /api/bot/devs) says who each dev is and which place is theirs; a dev with no
-// place gets no dot. Dots the bot left on a place that is no longer anyone's
-// are taken off again.
+// The Assets board on DevTrack decides who is busy, and its Developers tab says
+// who each dev is and which place is theirs (backend /api/bot/board/working); a
+// dev with no place gets no dot. Dots the bot left on a place that is no longer
+// anyone's are taken off again.
 //
-// After each sync the bot reports back to that page: each dev's dot, their
-// tasks in progress and any problem with their place, plus the server's
-// categories and channels for the page's picker.
+// After each sync the bot reports back: each dev's dot and any problem with their
+// place, plus the server's categories and channels for the page's picker.
 //
 // Runs every two minutes, and a few seconds after a task is given, taken off or
-// finished from Discord, or a dev is changed on the page. Needs LINEAR_API_KEY
-// and ASSET_STATUS_POSTS=true, and Manage Channels (categories, forums,
-// channels) or Manage Threads (posts) where the dots go.
+// finished (from Discord or the page), or a dev is changed. Needs
+// ASSET_STATUS_POSTS=true, and Manage Channels (categories, forums, channels) or
+// Manage Threads (posts) where the dots go.
 // ASSET_STATUS_POSTS_DRY_RUN=true logs the renames instead of making them.
 
 const axios = require('axios');
 const { ChannelType } = require('discord.js');
-const linear = require('./linear');
 
 const API_URL = process.env.API_URL || 'http://localhost:3001';
 const BOT_SECRET = process.env.BOT_SECRET;
@@ -65,17 +63,17 @@ async function rename(channel, dot) {
   const now = Date.now();
   const recent = (renames.get(channel.id) || []).filter(t => now - t < RENAME_WINDOW_MS);
   if (recent.length >= 2) return 'waiting'; // picked up on a later sync
-  if (DRY_RUN) { console.log(`[LinearStatus] (dry run) "${channel.name}" -> "${wanted}"`); return 'dry'; }
+  if (DRY_RUN) { console.log(`[DevStatus] (dry run) "${channel.name}" -> "${wanted}"`); return 'dry'; }
   try {
     const before = channel.name;
-    await channel.setName(wanted, 'Linear: dev availability');
+    await channel.setName(wanted, 'Assets board: dev availability');
     renames.set(channel.id, [...recent, now]);
-    console.log(`[LinearStatus] "${before}" -> "${wanted}"`);
+    console.log(`[DevStatus] "${before}" -> "${wanted}"`);
     return 'renamed';
   } catch (err) {
     if (!complained.has(channel.id)) {
       complained.add(channel.id);
-      console.error(`[LinearStatus] Could not rename "${channel.name}" (${channel.id}): ${err.message}. The bot needs Manage Channels (categories, forums, channels) or Manage Threads (posts) there.`);
+      console.error(`[DevStatus] Could not rename "${channel.name}" (${channel.id}): ${err.message}. The bot needs Manage Channels (categories, forums, channels) or Manage Threads (posts) there.`);
     }
     return 'failed';
   }
@@ -97,20 +95,23 @@ async function reportChannels() {
 }
 
 async function sync() {
-  const dir = await linear.devDirectory(true);
-  if (!dir.ok) return; // the list isn't reachable: leave the dots as they are
-  await reportChannels().catch(err => console.error('[LinearStatus] Could not send the channel list:', err.message));
-  const started = await linear.startedIssues();
+  let roster;
+  try {
+    ({ data: { devs: roster } } = await axios.get(`${API_URL}/api/bot/board/working`, bot));
+  } catch (err) {
+    console.error('[DevStatus] Could not load the devs:', err.response?.data?.error || err.message);
+    return; // the list isn't reachable: leave the dots as they are
+  }
+  await reportChannels().catch(err => console.error('[DevStatus] Could not send the channel list:', err.message));
 
   const status = {};
   const claimed = new Set();
   const problems = [];
   let busyDevs = 0;
-  for (const dev of dir.roster) {
-    const names = new Set(linear.namesOf(dir, dev.discordUserId, [dev.name]));
-    const tasks = started.filter(i => linear.nameOnTitle(i.title, names));
+  for (const dev of roster) {
+    const tasks = dev.tasks || [];
     if (tasks.length) busyDevs++;
-    const entry = { dot: tasks.length ? 'busy' : 'free', place: null, problem: null, tasks: tasks.map(i => ({ identifier: i.identifier, title: i.title, url: i.url })) };
+    const entry = { dot: tasks.length ? 'busy' : 'free', place: null, problem: null, tasks: tasks.map(t => ({ identifier: t.identifier, label: t.label })) };
     status[dev.id] = entry;
     if (!dev.channelId) { entry.dot = null; continue; }
     const place = await client.channels.fetch(dev.channelId).catch(() => null);
@@ -140,33 +141,33 @@ async function sync() {
   const text = JSON.stringify(status);
   if (text !== lastStatus) {
     await axios.put(`${API_URL}/api/bot/devs/status`, { status }, bot).then(() => { lastStatus = text; })
-      .catch(err => console.error('[LinearStatus] Could not report the dots:', err.message));
+      .catch(err => console.error('[DevStatus] Could not report the dots:', err.message));
   }
 
-  const placed = dir.roster.filter(d => d.channelId).length;
-  const summary = `${placed} of ${dir.roster.length} dev(s) have a place, ${busyDevs} with work in progress; ${cleared} old dot(s) removed${problems.length ? `; problems: ${problems.sort().join(', ')}` : ''}`;
-  if (summary !== lastSummary) { console.log(`[LinearStatus] ${summary}`); lastSummary = summary; }
+  const placed = roster.filter(d => d.channelId).length;
+  const summary = `${placed} of ${roster.length} dev(s) have a place, ${busyDevs} with work in progress; ${cleared} old dot(s) removed${problems.length ? `; problems: ${problems.sort().join(', ')}` : ''}`;
+  if (summary !== lastSummary) { console.log(`[DevStatus] ${summary}`); lastSummary = summary; }
 }
 
 async function run() {
   if (running) { refreshSoon(); return; }
   running = true;
   try { await sync(); } catch (err) {
-    console.error('[LinearStatus] Sync failed:', err.response?.data?.error || err.message);
+    console.error('[DevStatus] Sync failed:', err.response?.data?.error || err.message);
   } finally { running = false; }
 }
 
-// After a change from Discord or the Developers page: look again in a few seconds, once.
+// After a change from Discord or the page: look again in a few seconds, once.
 function refreshSoon(ms = 5000) {
-  if (!client || !ENABLED || !linear.enabled()) return;
+  if (!client || !ENABLED) return;
   clearTimeout(soon);
   soon = setTimeout(run, ms);
 }
 
 function start(discordClient) {
-  if (!ENABLED || !linear.enabled()) return;
+  if (!ENABLED) return;
   client = discordClient;
-  console.log(`[LinearStatus] Dots follow Linear's In Progress${DRY_RUN ? ' (dry run: nothing is renamed)' : ''}`);
+  console.log(`[DevStatus] Dots follow the Assets board's In progress${DRY_RUN ? ' (dry run: nothing is renamed)' : ''}`);
   setTimeout(run, 15 * 1000);
   setInterval(run, SYNC_MS);
 }

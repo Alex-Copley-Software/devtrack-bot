@@ -4,7 +4,7 @@
 //   reading     every message in the channels the board reads goes to the backend
 //               (/api/bot/board/messages), which goes through them every few hours and
 //               lists the updates on the page. The board says which channels: each dev's
-//               place on the Developers page and the channels picked in its settings. A
+//               place on the Developers tab and the channels picked in its settings. A
 //               forum counts for every post in it, a category for every channel in it.
 //   check-ins   once a day the backend sends the owner a DM (via the webhook, /board-digest)
 //               listing the in-progress tasks nobody has heard about lately.
@@ -68,11 +68,6 @@ function onMessage(message) {
     .catch(err => console.error('[Board] Could not send a message to the board:', err.response?.data?.error || err.message));
 }
 
-// "Linear just changed": the board reads it again now instead of within the minute.
-function linearChanged() {
-  axios.post(`${API_URL}/api/bot/board/sync`, {}, bot()).catch(() => {});
-}
-
 class Refused extends Error { constructor(message) { super(message); this.status = 400; } }
 
 // The owner's daily DM: { date, stale: [{ unit, task, dev, days, url }], updates, url, updatesUrl }
@@ -109,4 +104,4 @@ async function ping(p) {
   return 'channel';
 }
 
-module.exports = { start, onMessage, linearChanged, digest, ping, isWatched };
+module.exports = { start, onMessage, digest, ping, isWatched };

@@ -17,8 +17,8 @@ const reportPause = require('./report-pause');
 const qaCheck = require('./qa-check');
 const devTags = require('./dev-tags');
 const robloxConvert = require('./roblox-convert');
-const linear = require('./linear');
-const linearStatus = require('./linear-status');
+const assets = require('./assets');
+const devStatus = require('./dev-status');
 const modelViewer = require('./model-viewer');
 const board = require('./board');
 const forumSync = require('./forum-sync');
@@ -97,7 +97,7 @@ async function registerCommands() {
     ...personal.getCommandDefinitions(), // /ask /note /remind, owner only, usable anywhere; empty unless PERSONAL_OWNER_DISCORD_ID is set
     ...robloxConvert.getCommandDefinitions(), // right-click → Apps → Convert to Roblox (owner only)
     ...modelViewer.getCommandDefinitions(), // right-click → Open in Model Viewer: a .blend to the Models page (admins; owner in DMs)
-    ...linear.getCommandDefinitions(), // right-click → Send to Linear / Give Linear Task, and /linear's menu (admins; owner in DMs); empty unless LINEAR_API_KEY is set
+    ...assets.getCommandDefinitions(), // right-click → Send to Assets / Give Assets Task, and /assets's menu (admins; owner in DMs)
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -129,7 +129,7 @@ client.once(Events.ClientReady, async (c) => {
   await registerCommands();
   await reportPause.syncPauseState();
   personal.start(client); // no-op unless PERSONAL_OWNER_DISCORD_ID is set
-  linearStatus.start(client); // 🟢/🟡 on devs' forums from Linear's In Progress; needs ASSET_STATUS_POSTS=true
+  devStatus.start(client); // 🟢/🟡 on devs' places from the Assets board's In progress; needs ASSET_STATUS_POSTS=true
   tickets.start(client, threadReportMap); // the remaining Ticket Tool tickets; off with TICKETS_ENABLED=false
   // Dev-name tags (Ricky, Bryan, ...) on every post in the report forums.
   devTags.syncAll(client, Object.keys(WATCHED_CHANNELS).filter(id => WATCHED_CHANNELS[id] !== 'import'));
@@ -146,7 +146,7 @@ client.once(Events.ClientReady, async (c) => {
 client.on(Events.InteractionCreate, async (interaction) => {
  try {
   if (interaction.isStringSelectMenu()) {
-    if (await linear.handleSelect(interaction)) return;
+    if (await assets.handleSelect(interaction)) return;
     return;
   }
 
@@ -161,24 +161,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (await handleCreditButton(interaction)) return;
     if (await qaCheck.handleButton(interaction)) return;
     if (await robloxConvert.handleButton(interaction)) return;
-    if (await linear.handleButton(interaction)) return;
+    if (await assets.handleButton(interaction)) return;
     return;
   }
 
   if (interaction.isModalSubmit()) {
     if (await qaCheck.handleModal(interaction)) return;
     if (await robloxConvert.handleModal(interaction)) return;
-    if (await linear.handleModal(interaction)) return;
+    if (await assets.handleModal(interaction)) return;
   }
 
   if (await robloxConvert.handleContextMenu(interaction)) return;
-  if (await linear.handleContextMenu(interaction)) return;
+  if (await assets.handleContextMenu(interaction)) return;
   if (await modelViewer.handleContextMenu(interaction)) return;
 
   if (!interaction.isChatInputCommand()) return;
 
   if (await personal.handleCommand(interaction)) return;
-  if (await linear.handleCommand(interaction)) return;
+  if (await assets.handleCommand(interaction)) return;
   if (await qaCheck.handleCommand(interaction)) return;
 
 
